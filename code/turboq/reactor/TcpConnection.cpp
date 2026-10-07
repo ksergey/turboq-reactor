@@ -18,6 +18,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509_vfy.h>
 
+#include <algorithm>
 #include <string>
 
 #include "Error.h"
@@ -116,6 +117,9 @@ public:
     }
 };
 
+/// Ciphertext rings must hold at least one full TLS record (16 KiB + overhead) to make progress.
+constexpr std::size_t kMinCipherRingSize = 64u * 1024;
+
 // TLS record content types and handshake message types (RFC 8446).
 constexpr unsigned char kRecordAlert = 21;
 constexpr unsigned char kRecordHandshake = 22;
@@ -140,7 +144,21 @@ auto TcpCore::create(Reactor& reactor, TcpOptions options) -> TcpCore* {
     if (!txBuffer) {
         throw std::system_error{txBuffer.error(), "MirroredBuffer::create (tx)"};
     }
-    return new TcpCore{reactor, std::move(options), std::move(*rxBuffer), std::move(*txBuffer)};
+    MirroredBuffer cipherRx;
+    MirroredBuffer cipherTx;
+    if (options.tls.enabled && options.tls.kernelTls != KernelTls::Require) {
+        auto rx = MirroredBuffer::create({.capacityHint = std::max(options.rxBufferSize, kMinCipherRingSize)});
+        auto tx = MirroredBuffer::create({.capacityHint = std::max(options.txBufferSize, kMinCipherRingSize)});
+        if (!rx || !tx) {
+            throw std::system_error{!rx ? rx.error() : tx.error(), "MirroredBuffer::create (TLS)"};
+        }
+        cipherRx = std::move(*rx);
+        cipherTx = std::move(*tx);
+    }
+    auto* core = new TcpCore{reactor, std::move(options), std::move(*rxBuffer), std::move(*txBuffer)};
+    core->cipherRx_ = std::move(cipherRx);
+    core->cipherTx_ = std::move(cipherTx);
+    return core;
 }
 
 TcpCore::TcpCore(Reactor& reactor, TcpOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept
@@ -174,6 +192,12 @@ auto TcpCore::connect() -> std::expected<void, std::error_code> {
     txDirty_ = false;
     error_.clear();
     tlsActive_ = false;
+    tlsUserRx_ = false;
+    tlsUserTx_ = false;
+    rxEof_ = false;
+    observerPending_ = false;
+    cipherRx_.clear();
+    cipherTx_.clear();
     tlsVersion_ = {};
     tlsCipher_ = {};
     this->releaseSsl();
@@ -228,7 +252,11 @@ void TcpCore::close() noexcept {
     case ConnectionState::Handshaking: this->beginClose(); break;
     case ConnectionState::Ready:
         if (tlsActive_) {
-            this->sendCloseNotify();
+            if (tlsUserTx_) {
+                this->sendUserspaceCloseNotify();
+            } else {
+                this->sendCloseNotify();
+            }
         }
         this->beginClose();
         break;
@@ -286,6 +314,37 @@ void TcpCore::onCompletion(detail::OpCode op, std::int32_t res, [[maybe_unused]]
 
     case detail::OpCode::Recv:
         recvInFlight_ = false;
+        if (tlsUserRx_) {
+            // Userspace TLS: ciphertext lands in cipherRx_, OpenSSL decrypts into rxBuffer_.
+            if (res > 0) [[likely]] {
+                cipherRx_.produce(static_cast<std::size_t>(res));
+                rxTimestamp_ = reactor_.now();
+                auto const before = rxBuffer_.size();
+                this->decryptPending();
+                if (state_ == ConnectionState::Ready) {
+                    this->armRecv();
+                }
+                if (observer_ && rxBuffer_.size() != before) {
+                    observer_->onStreamData();
+                }
+            } else if (res == 0) {
+                // Decrypt what is left (close_notify included) before reporting the close.
+                rxEof_ = true;
+                auto const before = rxBuffer_.size();
+                this->decryptPending();
+                if (observer_ && rxBuffer_.size() != before) {
+                    observer_->onStreamData();
+                }
+                this->fail(makeErrorCode(Error::ClosedByPeer));
+            } else if (res == -EINTR || res == -EAGAIN) {
+                if (state_ == ConnectionState::Ready) {
+                    this->armRecv();
+                }
+            } else if (res != -ECANCELED) {
+                this->fail(makePosixErrorCode(-res));
+            }
+            break;
+        }
         if (res > 0 && tlsActive_) {
             // kTLS reports the record type of what was just read in a control message. The buffer
             // was zeroed before the receive, so a missing control message reads as cmsg_len == 0.
@@ -325,7 +384,10 @@ void TcpCore::onCompletion(detail::OpCode op, std::int32_t res, [[maybe_unused]]
     case detail::OpCode::Send:
         sendInFlight_ = false;
         if (res > 0) [[likely]] {
-            txBuffer_.consume(static_cast<std::size_t>(res));
+            this->wireTx().consume(static_cast<std::size_t>(res));
+            if (tlsUserRx_ && !cipherRx_.empty()) {
+                this->decryptPending(); // OpenSSL may have been waiting for room to answer (key update)
+            }
             // Short send or data committed meanwhile: keep going.
             this->startSend();
         } else if (res == -EINTR || res == -EAGAIN) {
@@ -384,7 +446,9 @@ void TcpCore::beginClose() noexcept {
 }
 
 void TcpCore::finishClose() noexcept {
-    this->releaseSsl();
+    if (!tlsUserRx_) {
+        this->releaseSsl(); // with userspace rx, kept so that consume() can drain what arrived
+    }
     if (fd_ >= 0) {
         ::close(fd_);
         fd_ = -1;
@@ -398,20 +462,27 @@ void TcpCore::finishClose() noexcept {
 }
 
 void TcpCore::armRecv() noexcept {
-    auto const buffer = rxBuffer_.writable();
+    // Userspace TLS receives ciphertext into its own ring; rxStalled_ then tracks the plaintext
+    // ring (set by decryptPending()).
+    auto const buffer = tlsUserRx_ ? cipherRx_.writable() : rxBuffer_.writable();
+    if (tlsUserRx_ && buffer.empty()) {
+        return; // both rings full: consume() decrypts and re-arms
+    }
     if (buffer.empty()) {
         // Ring is full: stop reading, TCP flow control pushes back on the peer. consume() resumes.
         rxStalled_ = true;
         return;
     }
-    rxStalled_ = false;
+    if (!tlsUserRx_) {
+        rxStalled_ = false;
+    }
 
     auto* sqe = reactor_.getSqe();
     if (!sqe) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
     }
-    if (tlsActive_) {
+    if (tlsActive_ && !tlsUserRx_) {
         std::memset(recvControl_, 0, sizeof(recvControl_));
         recvIov_.iov_base = buffer.data();
         recvIov_.iov_len = buffer.size();
@@ -430,6 +501,15 @@ void TcpCore::armRecv() noexcept {
 }
 
 void TcpCore::resumeRecv() noexcept {
+    if (tlsUserRx_ && ssl_) {
+        // Decrypt what is already buffered (in cipherRx_ or inside OpenSSL). Also after a close,
+        // so that everything received before it can still be read.
+        auto const before = rxBuffer_.size();
+        this->decryptPending();
+        if (observer_ && rxBuffer_.size() != before) {
+            this->scheduleObserverNotify(); // not from inside the observer's own consume()
+        }
+    }
     if (state_ == ConnectionState::Ready && !recvInFlight_) {
         this->armRecv();
     }
@@ -438,17 +518,16 @@ void TcpCore::resumeRecv() noexcept {
 void TcpCore::startHandshake() noexcept {
     state_ = ConnectionState::Handshaking;
 
-    // Fail before talking to the server when kernel TLS can't work anyway: every pointless
-    // handshake costs the exchange's connection rate limit.
+    // Can kernel TLS work at all? With Require, fail before talking to the server (every
+    // pointless handshake costs the exchange's connection rate limit); with Prefer, don't let
+    // OpenSSL try in vain.
     auto const support = detail::probeKernelTlsSupport();
-    if (!support.opensslKtls) {
-        this->fail(makeErrorCode(Error::OpenSslWithoutKtls));
+    bool const kernelPossible = support.opensslKtls && (support.moduleLoaded || support.canLoadModule);
+    if (options_.tls.kernelTls == KernelTls::Require && !kernelPossible) {
+        this->fail(makeErrorCode(support.opensslKtls ? Error::KernelTlsModuleMissing : Error::OpenSslWithoutKtls));
         return;
     }
-    if (!support.moduleLoaded && !support.canLoadModule) {
-        this->fail(makeErrorCode(Error::KernelTlsModuleMissing));
-        return;
-    }
+    bool const tryKernel = options_.tls.kernelTls != KernelTls::Disable && kernelPossible;
 
     // OpenSSL drives the handshake on the socket itself; io_uring only tells us when to retry.
     if (auto ec = setNonBlocking(fd_, true)) {
@@ -472,6 +551,9 @@ void TcpCore::startHandshake() noexcept {
     }
     SSL_set_app_data(ssl_, this);
     serverTrafficSecretSize_ = 0;
+    if (!tryKernel) {
+        ::SSL_clear_options(ssl_, SSL_OP_ENABLE_KTLS);
+    }
 
     auto const& serverName = options_.tls.serverName.empty() ? options_.host : options_.tls.serverName;
     bool const ipLiteral = isIpLiteral(serverName);
@@ -557,44 +639,46 @@ void TcpCore::armHandshakePoll(unsigned events) noexcept {
 void TcpCore::completeHandshake() noexcept {
     tlsVersion_ = ::SSL_get_version(ssl_);
     tlsCipher_ = ::SSL_CIPHER_get_name(::SSL_get_current_cipher(ssl_));
+    bool const require = options_.tls.kernelTls == KernelTls::Require;
 
-    if (BIO_get_ktls_send(::SSL_get_wbio(ssl_)) != 1) {
-        // OpenSSL skips kTLS silently. The usual reason is a module that could not be loaded
-        // (e.g. a kernel without CONFIG_TLS); otherwise the OpenSSL build or the cipher.
+    // Send side: OpenSSL either switched the socket to kernel TLS or silently did not.
+    bool const kernelTx = BIO_get_ktls_send(::SSL_get_wbio(ssl_)) == 1;
+    if (!kernelTx && require) {
+        // The usual reason is a module that could not be loaded (e.g. a kernel without
+        // CONFIG_TLS); otherwise the OpenSSL build or the cipher.
         auto const support = detail::probeKernelTlsSupport();
         this->fail(
             makeErrorCode(support.moduleLoaded ? Error::KernelTlsSendUnavailable : Error::KernelTlsModuleMissing));
         return;
     }
-    if (BIO_get_ktls_recv(::SSL_get_rbio(ssl_)) != 1) {
-        // OpenSSL < 3.2 enables kernel TLS for TLS 1.3 in the send direction only. Install the
-        // receive side ourselves from the server traffic secret. Nothing has been read with that
-        // secret yet (no read-ahead, handshake just finished), so the record sequence is 0.
-        if (::SSL_version(ssl_) != TLS1_3_VERSION || serverTrafficSecretSize_ == 0 || ::SSL_has_pending(ssl_)) {
-            this->fail(makeErrorCode(Error::KernelTlsReceiveUnavailable));
+
+    // Receive side: OpenSSL < 3.2 enables kernel TLS for TLS 1.3 in the send direction only; then
+    // the receive side is installed here from the server traffic secret.
+    bool kernelRx = BIO_get_ktls_recv(::SSL_get_rbio(ssl_)) == 1;
+    if (!kernelRx && kernelTx) {
+        auto const ec = this->installKernelRx();
+        if (ec && require) {
+            this->fail(ec);
             return;
         }
-        auto const cipherSuite = static_cast<std::uint16_t>(::SSL_CIPHER_get_id(::SSL_get_current_cipher(ssl_)));
-        auto info = detail::makeTls13CryptoInfo(
-            cipherSuite, std::span{serverTrafficSecret_}.first(serverTrafficSecretSize_), 0);
-        ::OPENSSL_cleanse(serverTrafficSecret_.data(), serverTrafficSecret_.size());
-        if (!info) {
-            this->fail(info.error());
-            return;
-        }
-        int const rc = ::setsockopt(fd_, SOL_TLS, TLS_RX, info->bytes.data(), info->size);
-        int const savedErrno = errno;
-        ::OPENSSL_cleanse(&*info, sizeof(*info));
-        if (rc != 0) {
-            this->fail({savedErrno, getKernelTlsRxErrorCategory()});
-            return;
-        }
+        kernelRx = !ec;
     }
     ::OPENSSL_cleanse(serverTrafficSecret_.data(), serverTrafficSecret_.size());
     serverTrafficSecretSize_ = 0;
 
-    // The kernel owns the session now.
-    this->releaseSsl();
+    tlsUserRx_ = !kernelRx;
+    tlsUserTx_ = !kernelTx;
+    if (tlsUserRx_ || tlsUserTx_) {
+        // Userspace TLS for what the kernel does not handle: OpenSSL talks to our rings through a
+        // custom BIO, the socket is driven by io_uring as usual.
+        if (!this->attachUserspaceBio()) {
+            this->fail(detail::popTlsError(makeErrorCode(Error::TlsHandshakeFailed)));
+            return;
+        }
+    } else {
+        this->releaseSsl(); // the kernel owns the session
+    }
+
     // Back to blocking mode: io_uring then waits for readiness itself instead of returning EAGAIN.
     if (auto ec = setNonBlocking(fd_, false)) {
         this->fail(ec);
@@ -602,10 +686,199 @@ void TcpCore::completeHandshake() noexcept {
     }
     tlsActive_ = true;
     state_ = ConnectionState::Ready;
+    if (tlsUserRx_) {
+        this->decryptPending(); // records OpenSSL may already hold
+    }
     this->armRecv();
     this->startSend();
     if (observer_) {
         observer_->onStreamReady();
+        if (!rxBuffer_.empty()) {
+            observer_->onStreamData();
+        }
+    }
+}
+
+auto TcpCore::installKernelRx() noexcept -> std::error_code {
+    // Nothing has been read with the server traffic secret yet (no read-ahead, the handshake just
+    // finished), so the record sequence is 0.
+    if (::SSL_version(ssl_) != TLS1_3_VERSION || serverTrafficSecretSize_ == 0 || ::SSL_has_pending(ssl_)) {
+        return makeErrorCode(Error::KernelTlsReceiveUnavailable);
+    }
+    auto const cipherSuite = static_cast<std::uint16_t>(::SSL_CIPHER_get_id(::SSL_get_current_cipher(ssl_)));
+    auto info =
+        detail::makeTls13CryptoInfo(cipherSuite, std::span{serverTrafficSecret_}.first(serverTrafficSecretSize_), 0);
+    if (!info) {
+        return info.error();
+    }
+    int const rc = ::setsockopt(fd_, SOL_TLS, TLS_RX, info->bytes.data(), info->size);
+    int const savedErrno = errno;
+    ::OPENSSL_cleanse(&*info, sizeof(*info));
+    if (rc != 0) {
+        return {savedErrno, getKernelTlsRxErrorCategory()};
+    }
+    return {};
+}
+
+namespace {
+
+[[nodiscard]] auto userspaceBioMethod() noexcept -> BIO_METHOD* {
+    static BIO_METHOD* const method = [] {
+        BIO_METHOD* m = ::BIO_meth_new(::BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "turboq-reactor");
+        if (m) {
+            ::BIO_meth_set_create(m, [](BIO* bio) {
+                ::BIO_set_init(bio, 1);
+                return 1;
+            });
+            ::BIO_meth_set_ctrl(m, [](BIO*, int cmd, long, void*) -> long {
+                return cmd == BIO_CTRL_FLUSH ? 1 : 0;
+            });
+        }
+        return m;
+    }();
+    return method;
+}
+
+} // namespace
+
+auto TcpCore::attachUserspaceBio() noexcept -> bool {
+    BIO_METHOD* method = userspaceBioMethod();
+    if (!method) {
+        return false;
+    }
+    // Set once; the lambdas above can't reach TcpCore's private members.
+    static bool const callbacksSet = [method] {
+        ::BIO_meth_set_read_ex(method, &TcpCore::bioRead);
+        ::BIO_meth_set_write_ex(method, &TcpCore::bioWrite);
+        return true;
+    }();
+    (void)callbacksSet;
+
+    BIO* bio = ::BIO_new(method);
+    if (!bio) {
+        return false;
+    }
+    ::BIO_set_data(bio, this);
+    if (tlsUserRx_ && tlsUserTx_) {
+        ::SSL_set_bio(ssl_, bio, bio); // one reference for both directions
+    } else if (tlsUserRx_) {
+        ::SSL_set0_rbio(ssl_, bio); // send side stays on the kernel TLS socket
+    } else {
+        ::SSL_set0_wbio(ssl_, bio);
+    }
+    // SSL_write() returns after a partial write when cipherTx_ is full and accepts a retry from
+    // a different address (the tx ring may have more data by then).
+    ::SSL_set_mode(ssl_, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+    return true;
+}
+
+auto TcpCore::bioRead(bio_st* bio, char* data, std::size_t size, std::size_t* done) noexcept -> int {
+    auto* self = static_cast<TcpCore*>(::BIO_get_data(bio));
+    BIO_clear_retry_flags(bio);
+    auto const available = self->cipherRx_.readable();
+    if (available.empty()) {
+        if (!self->rxEof_) {
+            BIO_set_retry_read(bio);
+        }
+        *done = 0;
+        return 0;
+    }
+    auto const n = std::min(size, available.size());
+    std::memcpy(data, available.data(), n);
+    self->cipherRx_.consume(n);
+    *done = n;
+    return 1;
+}
+
+auto TcpCore::bioWrite(bio_st* bio, char const* data, std::size_t size, std::size_t* done) noexcept -> int {
+    auto* self = static_cast<TcpCore*>(::BIO_get_data(bio));
+    BIO_clear_retry_flags(bio);
+    auto const space = self->cipherTx_.writable();
+    if (space.empty()) {
+        BIO_set_retry_write(bio);
+        *done = 0;
+        return 0;
+    }
+    auto const n = std::min(size, space.size());
+    std::memcpy(space.data(), data, n);
+    self->cipherTx_.produce(n);
+    *done = n;
+    return 1;
+}
+
+void TcpCore::decryptPending() noexcept {
+    while (true) {
+        auto const out = rxBuffer_.writable();
+        if (out.empty()) {
+            rxStalled_ = true; // consume() resumes
+            break;
+        }
+        rxStalled_ = false;
+        std::size_t n = 0;
+        ::ERR_clear_error();
+        int const rc = ::SSL_read_ex(ssl_, out.data(), out.size(), &n);
+        if (rc == 1) [[likely]] {
+            rxBuffer_.produce(n);
+            continue;
+        }
+        switch (::SSL_get_error(ssl_, rc)) {
+        case SSL_ERROR_WANT_READ: break;  // need more ciphertext
+        case SSL_ERROR_WANT_WRITE: break; // cipherTx_ full (key update answer): resumes after a send
+        case SSL_ERROR_ZERO_RETURN: this->fail(makeErrorCode(Error::ClosedByPeer)); break; // close_notify
+        default:
+            // A TCP close without close_notify reads as "unexpected EOF".
+            this->fail(rxEof_ ? makeErrorCode(Error::ClosedByPeer)
+                              : detail::popTlsError(makeErrorCode(Error::TlsUnexpectedRecord)));
+            break;
+        }
+        break;
+    }
+    ::ERR_clear_error();
+    // Reading may have produced records to send (key update answer, alerts).
+    if (tlsUserTx_ && !cipherTx_.empty() && state_ == ConnectionState::Ready && !sendInFlight_) {
+        this->startSend();
+    }
+}
+
+void TcpCore::encryptPending() noexcept {
+    while (!txBuffer_.empty()) {
+        auto const data = txBuffer_.readable();
+        std::size_t written = 0;
+        ::ERR_clear_error();
+        int const rc = ::SSL_write_ex(ssl_, data.data(), data.size(), &written);
+        if (rc == 1) [[likely]] {
+            txBuffer_.consume(written); // partial writes allowed: stops when cipherTx_ is full
+            continue;
+        }
+        if (::SSL_get_error(ssl_, rc) != SSL_ERROR_WANT_WRITE) {
+            this->fail(detail::popTlsError(makeErrorCode(Error::TlsUnexpectedRecord)));
+        }
+        break; // cipherTx_ full: continues after the next send completion
+    }
+}
+
+void TcpCore::sendUserspaceCloseNotify() noexcept {
+    // Best effort: pending data, then close_notify, straight to the socket.
+    this->encryptPending();
+    ::ERR_clear_error();
+    ::SSL_shutdown(ssl_);
+    ::ERR_clear_error();
+    if (!sendInFlight_) {
+        auto const data = cipherTx_.readable();
+        if (!data.empty()) {
+            auto const rc = ::send(fd_, data.data(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (rc > 0) {
+                cipherTx_.consume(static_cast<std::size_t>(rc));
+            }
+        }
+    }
+}
+
+void TcpCore::scheduleObserverNotify() noexcept {
+    observerPending_ = true;
+    if (!txDirty_) {
+        txDirty_ = true;
+        reactor_.pendingTx_.push_back(this); // onTxReady() delivers it in the next poll()
     }
 }
 
@@ -699,6 +972,12 @@ void TcpCore::markTxDirty() noexcept {
 }
 
 void TcpCore::onTxReady() noexcept {
+    if (observerPending_) {
+        observerPending_ = false;
+        if (observer_) {
+            observer_->onStreamData();
+        }
+    }
     this->startSend();
 }
 
@@ -707,8 +986,12 @@ void TcpCore::flushTx() noexcept {
         // Not connected yet, or a send is in flight: its completion picks up the new data.
         return;
     }
-    txDirty_ = false; // a stale entry may remain in Reactor::pendingTx_, it is skipped there
-    if (txBuffer_.empty()) {
+    if (!observerPending_) {
+        // A stale entry may remain in Reactor::pendingTx_, it is skipped there. With an observer
+        // notification pending, the entry must stay live: poll() delivers it.
+        txDirty_ = false;
+    }
+    if (txBuffer_.empty() && this->wireTx().empty()) {
         return;
     }
     if (options_.directSend) {
@@ -720,7 +1003,17 @@ void TcpCore::flushTx() noexcept {
 }
 
 void TcpCore::startSend() noexcept {
-    if (state_ != ConnectionState::Ready || sendInFlight_ || txBuffer_.empty()) {
+    if (state_ != ConnectionState::Ready || sendInFlight_) {
+        return;
+    }
+    if (tlsUserTx_) {
+        this->encryptPending();
+        if (state_ != ConnectionState::Ready) {
+            return;
+        }
+    }
+    auto& wire = this->wireTx();
+    if (wire.empty()) {
         return;
     }
     auto* sqe = reactor_.getSqe();
@@ -730,7 +1023,7 @@ void TcpCore::startSend() noexcept {
     }
     // Only one send in flight per socket: concurrent sends on a stream socket may interleave
     // partial writes. The range is a snapshot; data committed later goes with the next send.
-    auto const data = txBuffer_.readable();
+    auto const data = wire.readable();
     ::io_uring_prep_send(sqe, fd_, data.data(), data.size(), MSG_NOSIGNAL);
     ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Send));
     sendInFlight_ = true;
@@ -738,15 +1031,25 @@ void TcpCore::startSend() noexcept {
 }
 
 void TcpCore::sendDirect() noexcept {
-    auto const data = txBuffer_.readable();
+    if (tlsUserTx_) {
+        this->encryptPending();
+        if (state_ != ConnectionState::Ready) {
+            return;
+        }
+    }
+    auto& wire = this->wireTx();
+    auto const data = wire.readable();
+    if (data.empty()) {
+        return;
+    }
     auto const rc = ::send(fd_, data.data(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
     if (rc > 0) {
-        txBuffer_.consume(static_cast<std::size_t>(rc));
+        wire.consume(static_cast<std::size_t>(rc));
     } else if (rc < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
         this->fail(makePosixErrorCode(errno));
         return;
     }
-    if (!txBuffer_.empty()) {
+    if (!wire.empty() || !txBuffer_.empty()) {
         // Socket buffer is full: hand the rest to io_uring, it waits for writability.
         this->startSend();
         reactor_.submitNoThrow();

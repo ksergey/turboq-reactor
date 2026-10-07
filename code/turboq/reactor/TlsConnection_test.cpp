@@ -233,11 +233,11 @@ public:
 
 TEST_SUITE("TlsConnection") {
 
-    TEST_CASE("handshake, then kernel TLS takes over (or reports it can't)") {
+    TEST_CASE("TLS session in every kernel TLS mode") {
         TestCertificate certificate;
         bool const ktls = kernelTlsAvailable();
         if (!ktls) {
-            MESSAGE("kernel TLS is not available here: checking the handshake and the failure report only");
+            MESSAGE("kernel TLS is not available here: Prefer falls back to userspace, Require fails");
         }
 
         struct Variant {
@@ -246,90 +246,103 @@ TEST_SUITE("TlsConnection") {
             char const* serverCipherSuites;
             std::string_view expectedVersion;
         };
-        for (auto const& variant : {Variant{"tls1.3 aes128", TLS1_3_VERSION, "TLS_AES_128_GCM_SHA256", "TLSv1.3"},
-                 Variant{"tls1.3 aes256", TLS1_3_VERSION, "TLS_AES_256_GCM_SHA384", "TLSv1.3"},
-                 Variant{"tls1.3 chacha", TLS1_3_VERSION, "TLS_CHACHA20_POLY1305_SHA256", "TLSv1.3"},
-                 Variant{"tls1.2", TLS1_2_VERSION, nullptr, "TLSv1.2"}}) {
-            CAPTURE(variant.name);
-            TlsServer server{
-                certificate.serverContext(variant.serverCipherSuites, variant.serverMaxVersion), [](SSL* ssl) {
-                    // Session tickets (TLS 1.3) go out before this: the client must skip them.
-                    if (::SSL_write(ssl, "hello from server", 17) != 17) {
-                        return false;
-                    }
-                    if (readExactly(ssl, 17) != "hello from client") {
-                        return false;
-                    }
-                    ::SSL_shutdown(ssl); // close_notify
-                    char byte;
-                    return ::SSL_read(ssl, &byte, 1) <= 0;
-                }};
+        for (auto const mode : {KernelTls::Prefer, KernelTls::Disable, KernelTls::Require}) {
+            CAPTURE(static_cast<int>(mode));
+            for (auto const& variant : {Variant{"tls1.3 aes128", TLS1_3_VERSION, "TLS_AES_128_GCM_SHA256", "TLSv1.3"},
+                     Variant{"tls1.3 aes256", TLS1_3_VERSION, "TLS_AES_256_GCM_SHA384", "TLSv1.3"},
+                     Variant{"tls1.3 chacha", TLS1_3_VERSION, "TLS_CHACHA20_POLY1305_SHA256", "TLSv1.3"},
+                     Variant{"tls1.2", TLS1_2_VERSION, nullptr, "TLSv1.2"}}) {
+                CAPTURE(variant.name);
+                TlsServer server{
+                    certificate.serverContext(variant.serverCipherSuites, variant.serverMaxVersion), [](SSL* ssl) {
+                        // Session tickets (TLS 1.3) go out before this: the client must skip them.
+                        if (::SSL_write(ssl, "hello from server", 17) != 17) {
+                            return false;
+                        }
+                        if (readExactly(ssl, 17) != "hello from client") {
+                            return false;
+                        }
+                        ::SSL_shutdown(ssl); // close_notify
+                        char byte;
+                        return ::SSL_read(ssl, &byte, 1) <= 0;
+                    }};
 
-            Reactor reactor;
-            TcpConnection conn{
-                reactor, {.host = "127.0.0.1",
-                             .port = server.port(),
-                             .tls = {.enabled = true, .serverName = "localhost", .caFile = certificate.pemPath()}}};
-            REQUIRE(conn.connect());
+                Reactor reactor;
+                TcpConnection conn{reactor, {.host = "127.0.0.1",
+                                                .port = server.port(),
+                                                .tls = {.enabled = true,
+                                                    .serverName = "localhost",
+                                                    .caFile = certificate.pemPath(),
+                                                    .kernelTls = mode}}};
+                REQUIRE(conn.connect());
 
-            // Written while connecting/handshaking: must go out once the connection is Ready.
-            REQUIRE(conn.tx.push(asBytes("hello from client")));
+                // Written while connecting/handshaking: must go out once the connection is Ready.
+                REQUIRE(conn.tx.push(asBytes("hello from client")));
 
-            REQUIRE(pollUntil(reactor, [&] {
-                return conn.state() == ConnectionState::Ready || conn.state() == ConnectionState::Closed;
-            }));
-            REQUIRE_EQ(conn.tlsVersion(), variant.expectedVersion);
-            REQUIRE_FALSE(conn.tlsCipher().empty());
+                REQUIRE(pollUntil(reactor, [&] {
+                    return conn.state() == ConnectionState::Ready || conn.state() == ConnectionState::Closed;
+                }));
 
-            if (!ktls) {
-                REQUIRE_EQ(conn.state(), ConnectionState::Closed);
-                REQUIRE(isKernelTlsError(conn.error()));
+                if (mode == KernelTls::Require && !ktls) {
+                    REQUIRE_EQ(conn.state(), ConnectionState::Closed);
+                    REQUIRE(isKernelTlsError(conn.error()));
+                    server.join();
+                    continue;
+                }
+
+                REQUIRE_EQ(conn.state(), ConnectionState::Ready);
+                REQUIRE_EQ(conn.tlsVersion(), variant.expectedVersion);
+                REQUIRE_FALSE(conn.tlsCipher().empty());
+                auto const expectedOffload =
+                    mode == KernelTls::Disable || !ktls ? KernelTlsOffload::None : KernelTlsOffload::Full;
+                REQUIRE_EQ(static_cast<int>(conn.kernelTlsOffload()), static_cast<int>(expectedOffload));
+
+                REQUIRE(pollUntil(reactor, [&] {
+                    return conn.rx.fetch().size() >= 17;
+                }));
+                REQUIRE_EQ(asString(conn.rx.fetch()), "hello from server");
+                conn.rx.consume();
+
+                // The server answers our message with close_notify.
+                REQUIRE(pollUntil(reactor, [&] {
+                    return conn.state() == ConnectionState::Closed;
+                }));
+                REQUIRE_EQ(conn.error(), makeErrorCode(Error::ClosedByPeer));
                 server.join();
-                REQUIRE(server.handshakeOk);
-                continue;
+                REQUIRE(server.scriptOk);
             }
-
-            REQUIRE_EQ(conn.state(), ConnectionState::Ready);
-            REQUIRE(pollUntil(reactor, [&] {
-                return conn.rx.fetch().size() >= 17;
-            }));
-            REQUIRE_EQ(asString(conn.rx.fetch()), "hello from server");
-            conn.rx.consume();
-
-            // The server answers our message with close_notify.
-            REQUIRE(pollUntil(reactor, [&] {
-                return conn.state() == ConnectionState::Closed;
-            }));
-            REQUIRE_EQ(conn.error(), makeErrorCode(Error::ClosedByPeer));
-            server.join();
-            REQUIRE(server.scriptOk);
         }
     }
 
     TEST_CASE("user close sends close_notify") {
-        if (!kernelTlsAvailable()) {
-            MESSAGE("kernel TLS is not available here, skipping");
-            return;
+        for (auto const mode : {KernelTls::Prefer, KernelTls::Disable}) {
+            CAPTURE(static_cast<int>(mode));
+            TestCertificate certificate;
+            TlsServer server{certificate.serverContext(), [](SSL* ssl) {
+                                 if (readExactly(ssl, 4) != "last") {
+                                     return false;
+                                 }
+                                 char byte;
+                                 int const rc = ::SSL_read(ssl, &byte, 1);
+                                 return rc <= 0 && ::SSL_get_error(ssl, rc) == SSL_ERROR_ZERO_RETURN;
+                             }};
+            Reactor reactor;
+            TcpConnection conn{
+                reactor, {.host = "127.0.0.1",
+                             .port = server.port(),
+                             .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = mode}}};
+            REQUIRE(conn.connect());
+            REQUIRE(pollUntil(reactor, [&] {
+                return conn.state() == ConnectionState::Ready;
+            }));
+            REQUIRE(conn.tx.push(asBytes("last"))); // committed, not flushed: close() must send it first
+            conn.close();
+            REQUIRE(pollUntil(reactor, [&] {
+                return conn.state() == ConnectionState::Closed;
+            }));
+            server.join();
+            REQUIRE(server.scriptOk);
         }
-        TestCertificate certificate;
-        TlsServer server{certificate.serverContext(), [](SSL* ssl) {
-                             char byte;
-                             int const rc = ::SSL_read(ssl, &byte, 1);
-                             return rc <= 0 && ::SSL_get_error(ssl, rc) == SSL_ERROR_ZERO_RETURN;
-                         }};
-        Reactor reactor;
-        TcpConnection conn{reactor,
-            {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .caFile = certificate.pemPath()}}};
-        REQUIRE(conn.connect());
-        REQUIRE(pollUntil(reactor, [&] {
-            return conn.state() == ConnectionState::Ready;
-        }));
-        conn.close();
-        REQUIRE(pollUntil(reactor, [&] {
-            return conn.state() == ConnectionState::Closed;
-        }));
-        server.join();
-        REQUIRE(server.scriptOk);
     }
 
     TEST_CASE("missing tls module is reported before talking to the server") {
@@ -349,7 +362,8 @@ TEST_SUITE("TlsConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TcpConnection conn{reactor, {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true}}};
+        TcpConnection conn{reactor,
+            {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .kernelTls = KernelTls::Require}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
@@ -400,13 +414,14 @@ TEST_SUITE("TlsConnection") {
             {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .caFile = certificate.pemPath()}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
-            return conn.state() == ConnectionState::Ready || conn.state() == ConnectionState::Closed;
+            return conn.state() == ConnectionState::Ready;
+        }));
+        conn.close();
+        REQUIRE(pollUntil(reactor, [&] {
+            return conn.state() == ConnectionState::Closed;
         }));
         server.join();
         REQUIRE(server.handshakeOk);
-        if (conn.state() == ConnectionState::Closed) {
-            REQUIRE(isKernelTlsError(conn.error()));
-        }
     }
 
     TEST_CASE("verification can be disabled") {
@@ -648,6 +663,309 @@ TEST_SUITE("TlsConnection") {
             REQUIRE_EQ(ci.rec_seq[i], i + 1);
         }
         REQUIRE_FALSE(detail::makeTls13CryptoInfo(0x1304, secret, 0)); // TLS_AES_128_CCM_SHA256: no kTLS
+    }
+
+    // The OpenSSL fallback, exercised everywhere with KernelTls::Disable.
+
+    TEST_CASE("userspace TLS: large transfers through small rings in both directions") {
+        constexpr std::size_t kDown = 1u << 20;
+        constexpr std::size_t kUp = 512u * 1024;
+        auto const pattern = [](std::size_t i) {
+            return static_cast<char>((i * 131 + 7) % 251);
+        };
+        std::atomic<bool> upOk{false};
+        TestCertificate certificate;
+        TlsServer server{certificate.serverContext(), [&](SSL* ssl) {
+                             std::string chunk(16384, '\0');
+                             for (std::size_t offset = 0; offset < kDown; offset += chunk.size()) {
+                                 for (std::size_t i = 0; i < chunk.size(); ++i) {
+                                     chunk[i] = pattern(offset + i);
+                                 }
+                                 if (::SSL_write(ssl, chunk.data(), static_cast<int>(chunk.size())) <= 0) {
+                                     return false;
+                                 }
+                             }
+                             auto const up = readExactly(ssl, kUp);
+                             bool ok = up.size() == kUp;
+                             for (std::size_t i = 0; ok && i < kUp; ++i) {
+                                 ok = up[i] == pattern(i);
+                             }
+                             upOk = ok;
+                             ::SSL_shutdown(ssl);
+                             return ok;
+                         }};
+        Reactor reactor;
+        TcpConnection conn{
+            reactor, {.host = "127.0.0.1",
+                         .port = server.port(),
+                         .rxBufferSize = 4096,
+                         .txBufferSize = 8192,
+                         .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+        REQUIRE(conn.connect());
+
+        std::size_t received = 0;
+        std::size_t sent = 0;
+        bool corrupted = false;
+        REQUIRE(pollUntil(
+            reactor,
+            [&] {
+                // Consume in odd chunks: the plaintext ring is far smaller than a TLS record.
+                if (auto data = conn.rx.fetch(); !data.empty()) {
+                    auto const take = std::min<std::size_t>(data.size(), 1000);
+                    for (std::size_t i = 0; i < take; ++i) {
+                        corrupted = corrupted || static_cast<char>(data[i]) != pattern(received + i);
+                    }
+                    received += take;
+                    conn.rx.consume(take);
+                }
+                if (conn.state() == ConnectionState::Ready && sent < kUp) {
+                    auto const n = std::min({conn.tx.available(), kUp - sent, std::size_t{3000}});
+                    if (auto buffer = conn.tx.prepare(n); !buffer.empty()) {
+                        for (std::size_t i = 0; i < n; ++i) {
+                            buffer[i] = static_cast<std::byte>(pattern(sent + i));
+                        }
+                        conn.tx.commit();
+                        conn.tx.flush();
+                        sent += n;
+                    }
+                }
+                return received == kDown && conn.state() == ConnectionState::Closed;
+            },
+            20000ms));
+        REQUIRE_FALSE(corrupted);
+        REQUIRE_EQ(sent, kUp);
+        REQUIRE_EQ(conn.error(), makeErrorCode(Error::ClosedByPeer)); // close_notify
+        server.join();
+        REQUIRE(upOk);
+    }
+
+    TEST_CASE("userspace TLS: key update requested by the server") {
+        TestCertificate certificate;
+        TlsServer server{
+            certificate.serverContext(), [](SSL* ssl) {
+                if (::SSL_write(ssl, "before", 6) != 6) {
+                    return false;
+                }
+                // New server keys, and the client must update its own as well.
+                if (::SSL_key_update(ssl, SSL_KEY_UPDATE_REQUESTED) != 1 || ::SSL_write(ssl, "after", 5) != 5) {
+                    return false;
+                }
+                return readExactly(ssl, 5) == "reply";
+            }};
+        Reactor reactor;
+        TcpConnection conn{
+            reactor, {.host = "127.0.0.1",
+                         .port = server.port(),
+                         .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+        REQUIRE(conn.connect());
+        REQUIRE(pollUntil(reactor, [&] {
+            return conn.rx.fetch().size() == 11;
+        }));
+        REQUIRE_EQ(asString(conn.rx.fetch()), "beforeafter");
+        REQUIRE(conn.tx.push(asBytes("reply")));
+        conn.tx.flush();
+        REQUIRE(pollUntil(reactor, [&] {
+            return server.scriptOk.load(); // the server decrypted "reply" with our updated keys
+        }));
+        server.join(); // then it closes: whatever the state, it must not be a TLS failure
+        REQUIRE((conn.state() == ConnectionState::Ready || conn.error() == makeErrorCode(Error::ClosedByPeer)));
+    }
+
+    TEST_CASE("userspace TLS: TCP close without close_notify") {
+        TestCertificate certificate;
+        TlsServer server{certificate.serverContext(), [](SSL* ssl) {
+                             if (::SSL_write(ssl, "data", 4) != 4) {
+                                 return false;
+                             }
+                             ::shutdown(::SSL_get_fd(ssl), SHUT_RDWR); // no close_notify
+                             return true;
+                         }};
+        Reactor reactor;
+        TcpConnection conn{
+            reactor, {.host = "127.0.0.1",
+                         .port = server.port(),
+                         .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+        REQUIRE(conn.connect());
+        REQUIRE(pollUntil(reactor, [&] {
+            return conn.state() == ConnectionState::Closed;
+        }));
+        REQUIRE_EQ(conn.error(), makeErrorCode(Error::ClosedByPeer));
+        REQUIRE_EQ(asString(conn.rx.fetch()), "data");
+        server.join();
+    }
+
+    TEST_CASE("userspace TLS: everything received before a close stays readable") {
+        constexpr std::size_t kTotal = 48 * 1024; // much more than the plaintext ring
+        TestCertificate certificate;
+        TlsServer server{certificate.serverContext(), [](SSL* ssl) {
+                             std::string const data(kTotal, 'x');
+                             if (::SSL_write(ssl, data.data(), static_cast<int>(data.size())) <= 0) {
+                                 return false;
+                             }
+                             ::SSL_shutdown(ssl);
+                             return true;
+                         }};
+        Reactor reactor;
+        TcpConnection conn{
+            reactor, {.host = "127.0.0.1",
+                         .port = server.port(),
+                         .rxBufferSize = 4096,
+                         .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+        REQUIRE(conn.connect());
+        // Do not consume: the connection closes with most of the data still undecrypted.
+        REQUIRE(pollUntil(reactor, [&] {
+            return conn.state() == ConnectionState::Closed;
+        }));
+        server.join();
+        std::size_t received = 0;
+        while (!conn.rx.empty()) {
+            for (auto b : conn.rx.fetch()) {
+                REQUIRE_EQ(static_cast<char>(b), 'x');
+            }
+            received += conn.rx.fetch().size();
+            conn.rx.consume(); // decrypts the next part
+        }
+        REQUIRE_EQ(received, kTotal);
+    }
+
+    TEST_CASE("userspace TLS: WebSocket over wss://") {
+        constexpr int kMessages = 20;
+        constexpr std::size_t kSize = 3000; // with an 8 KiB ring, parsing stalls and resumes
+        std::atomic<bool> pongOk{false};
+        TestCertificate certificate;
+        TlsServer server{certificate.serverContext(), [&](SSL* ssl) {
+                             std::string request;
+                             char buffer[4096];
+                             while (request.find("\r\n\r\n") == std::string::npos) {
+                                 int const rc = ::SSL_read(ssl, buffer, sizeof(buffer));
+                                 if (rc <= 0) {
+                                     return false;
+                                 }
+                                 request.append(buffer, static_cast<std::size_t>(rc));
+                             }
+                             auto const pos = request.find("Sec-WebSocket-Key: ");
+                             auto const key = request.substr(pos + 19, request.find("\r\n", pos) - pos - 19);
+                             auto const response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                                   "Connection: Upgrade\r\nSec-WebSocket-Accept: " +
+                                                   detail::computeWsAccept(key) + "\r\n\r\n";
+                             if (::SSL_write(ssl, response.data(), static_cast<int>(response.size())) <= 0) {
+                                 return false;
+                             }
+                             for (int m = 0; m < kMessages; ++m) {
+                                 std::string frame = {char(0x81), char(126), char(kSize >> 8), char(kSize & 0xFF)};
+                                 frame.append(kSize, static_cast<char>('a' + m));
+                                 if (::SSL_write(ssl, frame.data(), static_cast<int>(frame.size())) <= 0) {
+                                     return false;
+                                 }
+                             }
+                             std::string const ping = {char(0x89), char(2), 'h', 'b'};
+                             ::SSL_write(ssl, ping.data(), static_cast<int>(ping.size()));
+                             // Pong: 0x8A, 0x80 | 2, mask, masked "hb".
+                             auto const pong = readExactly(ssl, 8);
+                             pongOk = pong.size() == 8 && static_cast<unsigned char>(pong[0]) == 0x8A &&
+                                      (pong[6] ^ pong[2]) == 'h' && (pong[7] ^ pong[3]) == 'b';
+                             std::string const close = {char(0x88), char(2), char(0x03), char(0xE8)};
+                             ::SSL_write(ssl, close.data(), static_cast<int>(close.size()));
+                             char byte;
+                             ::SSL_read(ssl, &byte, 1);
+                             return true;
+                         }};
+        Reactor reactor;
+        WsConnection ws{reactor,
+            {.url = "wss://127.0.0.1:" + std::to_string(server.port()) + "/stream",
+                .tls = {.serverName = "localhost", .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable},
+                .rxBufferSize = 8192}};
+        REQUIRE(ws.connect());
+        int received = 0;
+        REQUIRE(pollUntil(
+            reactor,
+            [&] {
+                while (!ws.rx.empty()) {
+                    auto const message = ws.rx.fetch();
+                    REQUIRE_EQ(message.size(), kSize);
+                    REQUIRE_EQ(static_cast<char>(message[0]), static_cast<char>('a' + received));
+                    ++received;
+                    ws.rx.consume();
+                }
+                return ws.state() == ConnectionState::Closed;
+            },
+            10000ms));
+        REQUIRE_EQ(received, kMessages);
+        REQUIRE_EQ(ws.error(), std::error_code(1000, getWsCloseCategory()));
+        server.join();
+        REQUIRE(pongOk);
+    }
+
+    TEST_CASE("userspace TLS: connections destroyed mid-stream") {
+        TestCertificate certificate;
+        auto streamForever = [](SSL* ssl) {
+            std::string const chunk(16384, 'z');
+            while (::SSL_write(ssl, chunk.data(), static_cast<int>(chunk.size())) > 0) {}
+            return true;
+        };
+        Reactor reactor;
+        {
+            TlsServer server{certificate.serverContext(), streamForever};
+            {
+                TcpConnection conn{reactor,
+                    {.host = "127.0.0.1",
+                        .port = server.port(),
+                        .rxBufferSize = 4096,
+                        .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+                REQUIRE(conn.connect());
+                REQUIRE(pollUntil(reactor, [&] {
+                    return conn.rx.fetch().size() == 4096; // plaintext ring full, ciphertext piling up
+                }));
+                conn.rx.consume(100);
+            }
+            REQUIRE(pollUntil(reactor, [&] {
+                return reactor.retiredCount() == 0;
+            }));
+        }
+        {
+            // WebSocket: consume() while stalled schedules a deferred observer notification in the
+            // reactor; destroying the connection right after must unlink it.
+            std::string const frame = [] {
+                std::string f = {char(0x82), char(126), char(0x0B), char(0xB8)}; // 3000 bytes
+                f.append(3000, 'w');
+                return f;
+            }();
+            TlsServer server{certificate.serverContext(), [&](SSL* ssl) {
+                                 std::string request;
+                                 char buffer[4096];
+                                 while (request.find("\r\n\r\n") == std::string::npos) {
+                                     int const rc = ::SSL_read(ssl, buffer, sizeof(buffer));
+                                     if (rc <= 0) {
+                                         return false;
+                                     }
+                                     request.append(buffer, static_cast<std::size_t>(rc));
+                                 }
+                                 auto const pos = request.find("Sec-WebSocket-Key: ");
+                                 auto const key = request.substr(pos + 19, request.find("\r\n", pos) - pos - 19);
+                                 auto const response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                                       "Connection: Upgrade\r\nSec-WebSocket-Accept: " +
+                                                       detail::computeWsAccept(key) + "\r\n\r\n";
+                                 ::SSL_write(ssl, response.data(), static_cast<int>(response.size()));
+                                 while (::SSL_write(ssl, frame.data(), static_cast<int>(frame.size())) > 0) {}
+                                 return true;
+                             }};
+            {
+                WsConnection ws{reactor, {.url = "wss://127.0.0.1:" + std::to_string(server.port()) + "/",
+                                             .tls = {.serverName = "localhost",
+                                                 .caFile = certificate.pemPath(),
+                                                 .kernelTls = KernelTls::Disable},
+                                             .rxBufferSize = 8192}};
+                REQUIRE(ws.connect());
+                REQUIRE(pollUntil(reactor, [&] {
+                    return ws.rx.size() >= 2;
+                }));
+                ws.rx.consume();
+                ws.rx.consume();
+            }
+            REQUIRE(pollUntil(reactor, [&] {
+                return reactor.retiredCount() == 0;
+            }));
+        }
     }
 }
 

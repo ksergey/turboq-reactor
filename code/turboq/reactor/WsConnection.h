@@ -284,6 +284,10 @@ public:
         return tcp_.tlsCipher();
     }
 
+    [[nodiscard]] auto kernelTlsOffload() const noexcept -> KernelTlsOffload {
+        return tcp_.kernelTlsOffload();
+    }
+
     [[nodiscard]] auto nativeHandle() const noexcept -> int {
         return tcp_.nativeHandle();
     }
@@ -448,6 +452,11 @@ public:
 
     [[nodiscard]] auto tlsCipher() const noexcept -> std::string_view {
         return core_->tlsCipher();
+    }
+
+    /// Which TLS directions the kernel handles (wss://); the rest is OpenSSL in userspace.
+    [[nodiscard]] auto kernelTlsOffload() const noexcept -> KernelTlsOffload {
+        return core_->kernelTlsOffload();
     }
 
     /// Native socket descriptor (-1 when closed). For setsockopt()/getsockopt() only.

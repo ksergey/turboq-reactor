@@ -162,7 +162,7 @@ auto describeKernelTlsSupport() -> std::string {
     if (support.moduleLoaded) {
         result += "loaded";
     } else if (support.canLoadModule) {
-        result += "not loaded, loads on first use (CAP_NET_ADMIN)";
+        result += "not loaded (this process may load it on first use: CAP_NET_ADMIN)";
     } else {
         result += "NOT loaded (sudo modprobe tls)";
     }

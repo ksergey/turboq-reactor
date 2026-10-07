@@ -28,6 +28,7 @@
 
 struct ssl_st;
 struct ssl_ctx_st;
+struct bio_st;
 
 namespace turboq::reactor {
 
@@ -35,11 +36,25 @@ class Reactor;
 
 enum class TlsVersion : std::uint8_t { Tls12, Tls13 };
 
-/// TLS on top of a TCP connection. OpenSSL performs the handshake, then the kernel (kTLS) takes
-/// over both directions: rx/tx carry plaintext and the data path is exactly the same as for plain
-/// TCP. If the kernel can't take over (no `tls` module, OpenSSL built without ktls), the
-/// connection fails with a kernel TLS error (isKernelTlsError(), describeKernelTlsSupport() for
-/// the details); there is no userspace fallback.
+/// What to do when the kernel can't take over a TLS session (kTLS).
+enum class KernelTls : std::uint8_t {
+    /// Kernel TLS when possible, otherwise OpenSSL in userspace (per direction).
+    Prefer,
+    /// Kernel TLS or fail with a kernel TLS error (isKernelTlsError()).
+    Require,
+    /// Always OpenSSL in userspace.
+    Disable,
+};
+
+/// Which directions of an established TLS session the kernel handles.
+enum class KernelTlsOffload : std::uint8_t { None, SendOnly, ReceiveOnly, Full };
+
+/// TLS on top of a TCP connection. OpenSSL performs the handshake. Then, preferably, the kernel
+/// (kTLS) takes over: rx/tx carry plaintext and the data path is exactly the same as for plain
+/// TCP. When it can't (no `tls` module, OpenSSL built without ktls, unsupported cipher), OpenSSL
+/// keeps encrypting and decrypting in userspace between the socket and the same rx/tx rings: one
+/// more copy per direction and the crypto on the polling thread, nothing else changes for the
+/// user. See KernelTls, TcpConnection::kernelTlsOffload().
 struct TlsOptions {
     bool enabled = false;
     /// SNI and the name the certificate is verified against. Empty means TcpOptions::host.
@@ -51,6 +66,7 @@ struct TlsOptions {
     TlsVersion minVersion = TlsVersion::Tls12;
     TlsVersion maxVersion = TlsVersion::Tls13;
     std::chrono::milliseconds handshakeTimeout{5000};
+    KernelTls kernelTls = KernelTls::Prefer;
 };
 
 struct TcpOptions {
@@ -173,7 +189,7 @@ public:
             conn_->flushTx();
         }
 
-        /// Committed bytes not yet accepted by the kernel.
+        /// Committed bytes not yet accepted by the kernel (with userspace TLS: not yet encrypted).
         [[nodiscard]] TURBOQ_FORCE_INLINE auto size() const noexcept -> std::size_t {
             return conn_->txBuffer_.size();
         }
@@ -209,10 +225,17 @@ private:
     socklen_t addressLength_{0};
     __kernel_timespec connectTimeout_{};
 
-    // TLS. ssl_ lives only during the handshake; afterwards the kernel owns the session.
+    // TLS. With full kernel offload ssl_ lives only during the handshake; with userspace TLS in
+    // either direction it stays until the next connect() (rx draining continues after a close).
     ssl_ctx_st* sslContext_{nullptr};
     ssl_st* ssl_{nullptr};
     bool tlsActive_{false};
+    bool tlsUserRx_{false}; // OpenSSL decrypts: socket -> cipherRx_ -> SSL_read -> rxBuffer_
+    bool tlsUserTx_{false}; // OpenSSL encrypts: txBuffer_ -> SSL_write -> cipherTx_ -> socket
+    bool rxEof_{false};     // the peer closed the TCP stream (userspace TLS rx)
+    bool observerPending_{false};
+    MirroredBuffer cipherRx_; // allocated unless KernelTls::Require
+    MirroredBuffer cipherTx_;
     std::string_view tlsVersion_{};
     std::string_view tlsCipher_{};
     std::chrono::steady_clock::time_point handshakeDeadline_{};
@@ -269,6 +292,16 @@ public:
         return tlsCipher_;
     }
 
+    [[nodiscard]] auto kernelTlsOffload() const noexcept -> KernelTlsOffload {
+        if (!tlsActive_) {
+            return KernelTlsOffload::None;
+        }
+        if (tlsUserRx_) {
+            return tlsUserTx_ ? KernelTlsOffload::None : KernelTlsOffload::SendOnly;
+        }
+        return tlsUserTx_ ? KernelTlsOffload::ReceiveOnly : KernelTlsOffload::Full;
+    }
+
     /// Native socket descriptor (-1 when closed). For setsockopt()/getsockopt() only: do not read
     /// from or write to it directly.
     [[nodiscard]] auto nativeHandle() const noexcept -> int {
@@ -306,6 +339,19 @@ private:
     void sendCloseNotify() noexcept;
     void releaseSsl() noexcept;
     static void onKeylog(ssl_st const* ssl, char const* line) noexcept;
+
+    // Userspace TLS (fallback).
+    [[nodiscard]] auto installKernelRx() noexcept -> std::error_code;
+    [[nodiscard]] auto attachUserspaceBio() noexcept -> bool;
+    void decryptPending() noexcept;
+    void encryptPending() noexcept;
+    void sendUserspaceCloseNotify() noexcept;
+    void scheduleObserverNotify() noexcept;
+    [[nodiscard]] auto wireTx() noexcept -> MirroredBuffer& {
+        return tlsUserTx_ ? cipherTx_ : txBuffer_;
+    }
+    static auto bioRead(bio_st* bio, char* data, std::size_t size, std::size_t* done) noexcept -> int;
+    static auto bioWrite(bio_st* bio, char const* data, std::size_t size, std::size_t* done) noexcept -> int;
 
     void markTxDirty() noexcept;
     void flushTx() noexcept;
@@ -395,6 +441,12 @@ public:
 
     [[nodiscard]] auto tlsCipher() const noexcept -> std::string_view {
         return core_->tlsCipher();
+    }
+
+    /// Which directions the kernel handles (kTLS); the rest is OpenSSL in userspace. None for
+    /// plain TCP or before the handshake completed.
+    [[nodiscard]] auto kernelTlsOffload() const noexcept -> KernelTlsOffload {
+        return core_->kernelTlsOffload();
     }
 
     /// Native socket descriptor (-1 when closed). For setsockopt()/getsockopt() only: do not read
