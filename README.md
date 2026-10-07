@@ -63,6 +63,7 @@ Fetched automatically via [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake):
 | `turboq_reactor_TOOLS` | `ON` | Build tools under [`tools/`](tools/). |
 | `turboq_reactor_EXAMPLES` | `ON` | Build examples under [`examples/`](examples/). |
 | `turboq_reactor_SANITIZER` | `OFF` | Build with ASan/UBSan/LeakSanitizer. |
+| `turboq_reactor_WERROR` | `OFF` | Treat warnings as errors in this project's code (enabled in CI). |
 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -92,7 +93,10 @@ using namespace turboq::reactor;
 
 Reactor reactor{{.taskRunMode = TaskRunMode::Deferred}};
 TcpConnection fix{reactor, {.host = "10.0.0.1", .port = 9000}};
-fix.connect();
+if (auto result = fix.connect(); !result) {
+    // synchronous failure (address resolution, socket()); asynchronous ones show up in state()
+    std::println(stderr, "connect: {}", result.error().message());
+}
 
 // Allowed before the connection is up: goes out right after connect completes.
 auto buffer = fix.tx.prepare(256);
@@ -107,7 +111,7 @@ while (running) {
 
     if (fix.state() == ConnectionState::Closed) {
         handleDisconnect(fix.error());   // rx data received before the disconnect was read above
-        fix.connect();                   // reconnect policy is yours
+        std::ignore = fix.connect();     // reconnect policy is yours (see examples/)
     }
 }
 ```
@@ -122,7 +126,7 @@ carry plaintext and the data path is byte for byte the plain TCP one, including 
 ```cpp
 TcpConnection ws{reactor, {.host = "stream.example.com", .port = 443,
                            .tls = {.enabled = true}}};       // SNI + verification against host
-ws.connect();
+if (!ws.connect()) { /* ws.error() says why */ }
 // state(): Connecting -> Handshaking -> Ready
 ```
 
@@ -150,7 +154,7 @@ queues of the same shape:
 ```cpp
 WsConnection md{reactor, {.url = "wss://stream.example.com:9443/ws/btcusdt@bookTicker",
                           .headers = {{"X-API-Key", key}}}};
-md.connect();
+if (!md.connect()) { /* md.error() says why */ }
 
 while (running) {
     reactor.poll();
@@ -189,8 +193,8 @@ the oldest datagram, `rx.info()` its metadata, `rx.consume()` releases it.
 UdpConnection lineA{reactor, {.group = "239.1.1.1", .interface = "eth1", .localPort = 5001,
                               .timestamping = Timestamping::Hardware}};
 UdpConnection lineB{reactor, {.group = "239.1.2.1", .interface = "eth2", .localPort = 5001}};
-lineA.open();
-lineB.open();
+if (!lineA.open()) { /* lineA.error() says why */ }
+if (!lineB.open()) { /* lineB.error() says why */ }
 
 while (running) {
     reactor.poll();

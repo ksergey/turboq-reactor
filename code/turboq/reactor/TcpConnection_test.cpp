@@ -116,7 +116,7 @@ TEST_SUITE("TcpConnection") {
                 Listener listener;
                 Reactor reactor{{.taskRunMode = mode}};
                 TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port(), .directSend = directSend}};
-                conn.connect();
+                REQUIRE(conn.connect());
                 REQUIRE_EQ(conn.state(), ConnectionState::Connecting);
 
                 // Written before the connection is established: must go out right after connect.
@@ -173,7 +173,7 @@ TEST_SUITE("TcpConnection") {
             Listener listener;
             Reactor reactor{{.taskRunMode = mode}};
             TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port()}};
-            conn.connect();
+            REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
             }));
@@ -199,7 +199,7 @@ TEST_SUITE("TcpConnection") {
         }
         Reactor reactor;
         TcpConnection conn{reactor, {.host = "127.0.0.1", .port = port}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
         }));
@@ -209,7 +209,9 @@ TEST_SUITE("TcpConnection") {
     TEST_CASE("address resolution failure is synchronous") {
         Reactor reactor;
         TcpConnection conn{reactor, {.host = "no-such-host.invalid", .port = 1}};
-        conn.connect();
+        auto const result = conn.connect();
+        REQUIRE_FALSE(result);
+        REQUIRE_EQ(result.error(), makeErrorCode(Error::AddressResolutionFailed));
         REQUIRE_EQ(conn.state(), ConnectionState::Closed);
         REQUIRE_EQ(conn.error(), makeErrorCode(Error::AddressResolutionFailed));
     }
@@ -218,7 +220,7 @@ TEST_SUITE("TcpConnection") {
         Listener listener;
         Reactor reactor;
         TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port()}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready;
         }));
@@ -253,7 +255,7 @@ TEST_SUITE("TcpConnection") {
         Listener listener;
         Reactor reactor;
         TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port()}};
-        conn.connect();
+        REQUIRE(conn.connect());
         auto const result = conn.connect();
         REQUIRE_FALSE(result);
         REQUIRE_EQ(result.error(), makeErrorCode(Error::InvalidState));
@@ -263,7 +265,7 @@ TEST_SUITE("TcpConnection") {
         Listener listener;
         Reactor reactor;
         TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port(), .rxBufferSize = 4096}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready;
         }));
@@ -311,7 +313,7 @@ TEST_SUITE("TcpConnection") {
                                             .txBufferSize = 1u << 20,
                                             .directSend = directSend,
                                             .socketSendBufferSize = 4096}};
-            conn.connect();
+            REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
             }));
@@ -354,7 +356,7 @@ TEST_SUITE("TcpConnection") {
         Listener listener;
         auto reactor = std::make_unique<Reactor>(ReactorOptions{.taskRunMode = TaskRunMode::Deferred});
         TcpConnection conn{*reactor, {.host = "127.0.0.1", .port = listener.port()}};
-        conn.connect();
+        REQUIRE(conn.connect());
 
         bool ready = false;
         std::thread worker{[&] {

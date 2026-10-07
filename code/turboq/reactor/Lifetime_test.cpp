@@ -123,7 +123,7 @@ TEST_SUITE("Lifetime") {
         int peer = -1;
         {
             TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port()}};
-            conn.connect();
+            REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
             }));
@@ -142,7 +142,7 @@ TEST_SUITE("Lifetime") {
         Reactor reactor;
         {
             TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port()}};
-            conn.connect(); // connect + linked timeout queued, not submitted yet
+            REQUIRE(conn.connect()); // connect + linked timeout queued, not submitted yet
         }
         REQUIRE_EQ(reactor.retiredCount(), 1);
         REQUIRE(pollUntil(reactor, [&] {
@@ -164,7 +164,7 @@ TEST_SUITE("Lifetime") {
         Reactor reactor;
         {
             TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port(), .directSend = false}};
-            conn.connect();
+            REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
             }));
@@ -216,7 +216,7 @@ TEST_SUITE("Lifetime") {
         std::thread server;
         {
             WsConnection ws{reactor, {.url = listener.url()}};
-            ws.connect();
+            REQUIRE(ws.connect());
             server = std::thread{[&] {
                 int const fd = acceptWebSocket(listener);
                 received = readUntilEof(fd);
@@ -244,7 +244,7 @@ TEST_SUITE("Lifetime") {
         Reactor reactor;
         {
             WsConnection ws{reactor, {.url = listener.url()}};
-            ws.connect();
+            REQUIRE(ws.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return ws.state() == ConnectionState::Handshaking;
             }));
@@ -262,7 +262,7 @@ TEST_SUITE("Lifetime") {
         for (int i = 0; i < kCount; ++i) {
             // Reallocations move the handles while connects are in flight.
             connections.emplace_back(reactor, TcpOptions{.host = "127.0.0.1", .port = listener.port()});
-            connections.back().connect();
+            REQUIRE(connections.back().connect());
         }
         REQUIRE(pollUntil(reactor, [&] {
             return std::ranges::all_of(connections, [](auto const& c) {
@@ -335,9 +335,9 @@ TEST_SUITE("Lifetime") {
         TcpConnection tcp{*reactor, {.host = "127.0.0.1", .port = listener.port()}};
         UdpConnection udp{*reactor, {.localAddress = "127.0.0.1"}};
         WsConnection ws{*reactor, {.url = wsListener.url()}};
-        tcp.connect();
+        REQUIRE(tcp.connect());
         REQUIRE(udp.open());
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(*reactor, [&] {
             return tcp.state() == ConnectionState::Ready;
         }));

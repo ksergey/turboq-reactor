@@ -158,6 +158,7 @@ jobs:
               -DCMAKE_CXX_COMPILER=${{ env.CXX }}
               -DCMAKE_VERBOSE_MAKEFILE=ON
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+              -Dturboq_reactor_WERROR=ON
             RESULT_VARIABLE result
           )
           if (NOT result EQUAL 0)
@@ -285,6 +286,7 @@ jobs:
               -DCMAKE_CXX_COMPILER=${{ env.CXX }}
               -DCMAKE_VERBOSE_MAKEFILE=ON
               -DCMAKE_BUILD_TYPE=Debug
+              -Dturboq_reactor_WERROR=ON
               ${sanitizer_flag}
             RESULT_VARIABLE result
           )

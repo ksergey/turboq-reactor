@@ -318,7 +318,7 @@ TEST_SUITE("WsConnection") {
         WsConnection ws{reactor, {.url = server.url("/ws?streams=btcusdt"),
                                      .headers = {{"X-Api-Key", "secret"}},
                                      .rxBufferSize = 256 * 1024}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(ws.tx.prepare(1).empty()); // not Ready yet
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Ready;
@@ -391,7 +391,7 @@ TEST_SUITE("WsConnection") {
             }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.rx.size() == 2;
         }));
@@ -416,7 +416,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.rx.size() == 2;
         }));
@@ -451,7 +451,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Ready;
         }));
@@ -490,7 +490,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
         }));
@@ -511,7 +511,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Ready;
         }));
@@ -536,7 +536,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Ready;
         }));
@@ -560,7 +560,7 @@ TEST_SUITE("WsConnection") {
             }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
         }));
@@ -578,7 +578,7 @@ TEST_SUITE("WsConnection") {
             }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
         }));
@@ -593,7 +593,7 @@ TEST_SUITE("WsConnection") {
             }}; // never answers
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url(), .handshakeTimeout = 200ms}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Handshaking;
         }));
@@ -614,7 +614,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
         }));
@@ -631,7 +631,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url(), .rxBufferSize = 4096}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
         }));
@@ -646,7 +646,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url(), .maxMessageSize = 100}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
         }));
@@ -674,7 +674,7 @@ TEST_SUITE("WsConnection") {
         }};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url(), .rxBufferSize = 4096, .maxQueuedMessages = 16}};
-        ws.connect();
+        REQUIRE(ws.connect());
         int expected = 0;
         REQUIRE(pollUntil(
             reactor,
@@ -701,7 +701,7 @@ TEST_SUITE("WsConnection") {
             &WsServer::accept101, 2};
         Reactor reactor;
         WsConnection ws{reactor, {.url = server.url()}};
-        ws.connect();
+        REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return !ws.rx.empty();
         }));

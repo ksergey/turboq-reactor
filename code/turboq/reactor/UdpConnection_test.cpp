@@ -103,7 +103,7 @@ TEST_SUITE("UdpConnection") {
                 Reactor reactor{{.taskRunMode = mode}};
 
                 UdpConnection server{reactor, {.localAddress = "127.0.0.1"}};
-                server.open();
+                REQUIRE(server.open());
                 REQUIRE_EQ(server.state(), ConnectionState::Ready);
                 REQUIRE_NE(server.localPort(), 0);
                 REQUIRE(server.tx.prepare(1).empty()); // no destination
@@ -112,7 +112,7 @@ TEST_SUITE("UdpConnection") {
                                                   .remoteAddress = "127.0.0.1",
                                                   .remotePort = server.localPort(),
                                                   .directSend = directSend}};
-                client.open();
+                REQUIRE(client.open());
                 REQUIRE_EQ(client.state(), ConnectionState::Ready);
 
                 REQUIRE(client.tx.push(asBytes("first")));
@@ -148,7 +148,7 @@ TEST_SUITE("UdpConnection") {
     TEST_CASE("timestamping can be disabled") {
         Reactor reactor;
         UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .timestamping = Timestamping::None}};
-        conn.open();
+        REQUIRE(conn.open());
         Sender sender{conn.localPort()};
         sender.send("x");
         REQUIRE(pollUntil(reactor, [&] {
@@ -161,7 +161,7 @@ TEST_SUITE("UdpConnection") {
     TEST_CASE("long datagrams are truncated") {
         Reactor reactor;
         UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .maxDatagramSize = 64}};
-        conn.open();
+        REQUIRE(conn.open());
         Sender sender{conn.localPort()};
         sender.send(std::string(100, 'z'));
         REQUIRE(pollUntil(reactor, [&] {
@@ -176,7 +176,7 @@ TEST_SUITE("UdpConnection") {
             CAPTURE(static_cast<int>(mode));
             Reactor reactor{{.taskRunMode = mode}};
             UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .bufferCount = 8}};
-            conn.open();
+            REQUIRE(conn.open());
             Sender sender{conn.localPort()};
 
             constexpr int kCount = 100; // fits easily into the default socket receive buffer
@@ -208,7 +208,7 @@ TEST_SUITE("UdpConnection") {
     TEST_CASE("kernel drops are reported") {
         Reactor reactor;
         UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .bufferCount = 1, .socketRecvBufferSize = 4096}};
-        conn.open();
+        REQUIRE(conn.open());
         Sender sender{conn.localPort()};
 
         // Nobody reads while these are sent into a tiny socket buffer: most get dropped by the kernel.
@@ -236,7 +236,7 @@ TEST_SUITE("UdpConnection") {
     TEST_CASE("close keeps received datagrams, open drops them") {
         Reactor reactor;
         UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .localPort = 0}};
-        conn.open();
+        REQUIRE(conn.open());
         auto const port = conn.localPort();
         Sender sender{port};
         sender.send("kept");
@@ -270,16 +270,16 @@ TEST_SUITE("UdpConnection") {
     TEST_CASE("invalid configuration is reported") {
         Reactor reactor;
         UdpConnection badGroup{reactor, {.group = "not-an-address", .localPort = 30000}};
-        badGroup.open();
+        REQUIRE_FALSE(badGroup.open());
         REQUIRE_EQ(badGroup.state(), ConnectionState::Closed);
         REQUIRE_EQ(badGroup.error(), makeErrorCode(Error::AddressResolutionFailed));
 
         UdpConnection badInterface{reactor, {.group = "239.1.1.1", .interface = "no-such-if0", .localPort = 30000}};
-        badInterface.open();
+        REQUIRE_FALSE(badInterface.open());
         REQUIRE_EQ(badInterface.state(), ConnectionState::Closed);
 
         UdpConnection mixedFamilies{reactor, {.localAddress = "::1", .remoteAddress = "127.0.0.1", .remotePort = 1}};
-        mixedFamilies.open();
+        REQUIRE_FALSE(mixedFamilies.open());
         REQUIRE_EQ(mixedFamilies.state(), ConnectionState::Closed);
         REQUIRE_EQ(mixedFamilies.error(), makeErrorCode(Error::InvalidOptions));
 
@@ -289,12 +289,12 @@ TEST_SUITE("UdpConnection") {
     TEST_CASE("tx queue depth limits queued datagrams") {
         Reactor reactor;
         UdpConnection sink{reactor, {.localAddress = "127.0.0.1"}};
-        sink.open();
+        REQUIRE(sink.open());
         UdpConnection conn{reactor, {.localAddress = "127.0.0.1",
                                         .remoteAddress = "127.0.0.1",
                                         .remotePort = sink.localPort(),
                                         .txQueueDepth = 4}};
-        conn.open();
+        REQUIRE(conn.open());
         for (int i = 0; i < 4; ++i) {
             REQUIRE(conn.tx.push(asBytes("q")));
         }
@@ -311,10 +311,10 @@ TEST_SUITE("UdpConnection") {
         Reactor reactor;
         constexpr std::uint16_t kPort = 31337;
         UdpConnection lineA{reactor, {.group = "239.255.10.1", .localPort = kPort}};
-        lineA.open();
+        auto const openedA = lineA.open();
         UdpConnection lineB{reactor, {.group = "239.255.10.2", .localPort = kPort}};
-        lineB.open();
-        if (lineA.state() != ConnectionState::Ready || lineB.state() != ConnectionState::Ready) {
+        auto const openedB = lineB.open();
+        if (!openedA || !openedB) {
             MESSAGE("multicast is not available here, skipping: ", lineA.error().message());
             return;
         }
@@ -350,13 +350,12 @@ TEST_SUITE("UdpConnection") {
         Reactor reactor;
         constexpr std::uint16_t kPort = 31338;
         UdpConnection receiver{reactor, {.group = "239.255.10.3", .localPort = kPort}};
-        receiver.open();
-        if (receiver.state() != ConnectionState::Ready) {
+        if (!receiver.open()) {
             MESSAGE("multicast is not available here, skipping: ", receiver.error().message());
             return;
         }
         UdpConnection publisher{reactor, {.remoteAddress = "239.255.10.3", .remotePort = kPort}};
-        publisher.open();
+        REQUIRE(publisher.open());
         REQUIRE_EQ(publisher.state(), ConnectionState::Ready);
         REQUIRE(publisher.tx.push(asBytes("snapshot request")));
         publisher.tx.flush();

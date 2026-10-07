@@ -268,7 +268,7 @@ TEST_SUITE("TlsConnection") {
                 reactor, {.host = "127.0.0.1",
                              .port = server.port(),
                              .tls = {.enabled = true, .serverName = "localhost", .caFile = certificate.pemPath()}}};
-            conn.connect();
+            REQUIRE(conn.connect());
 
             // Written while connecting/handshaking: must go out once the connection is Ready.
             REQUIRE(conn.tx.push(asBytes("hello from client")));
@@ -318,7 +318,7 @@ TEST_SUITE("TlsConnection") {
         Reactor reactor;
         TcpConnection conn{reactor,
             {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .caFile = certificate.pemPath()}}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready;
         }));
@@ -336,7 +336,7 @@ TEST_SUITE("TlsConnection") {
         Reactor reactor;
         // Default trust store: the self-signed test certificate is not in it.
         TcpConnection conn{reactor, {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true}}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
         }));
@@ -352,7 +352,7 @@ TEST_SUITE("TlsConnection") {
             reactor, {.host = "127.0.0.1",
                          .port = server.port(),
                          .tls = {.enabled = true, .serverName = "wrong.example", .caFile = certificate.pemPath()}}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
         }));
@@ -365,7 +365,7 @@ TEST_SUITE("TlsConnection") {
         Reactor reactor;
         TcpConnection conn{reactor,
             {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .caFile = certificate.pemPath()}}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready || conn.state() == ConnectionState::Closed;
         }));
@@ -382,7 +382,7 @@ TEST_SUITE("TlsConnection") {
         Reactor reactor;
         TcpConnection conn{
             reactor, {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .verifyPeer = false}}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready || conn.state() == ConnectionState::Closed;
         }));
@@ -395,7 +395,7 @@ TEST_SUITE("TlsConnection") {
         Reactor reactor;
         TcpConnection conn{
             reactor, {.host = "127.0.0.1", .port = silent.port(), .tls = {.enabled = true, .handshakeTimeout = 200ms}}};
-        conn.connect();
+        REQUIRE(conn.connect());
         auto const start = std::chrono::steady_clock::now();
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
@@ -408,7 +408,7 @@ TEST_SUITE("TlsConnection") {
         TlsServer server;
         Reactor reactor;
         TcpConnection conn{reactor, {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true}}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Handshaking;
         }));
@@ -423,7 +423,7 @@ TEST_SUITE("TlsConnection") {
         TlsServer silent;
         Reactor reactor;
         TcpConnection conn{reactor, {.host = "127.0.0.1", .port = silent.port(), .tls = {.enabled = true}}};
-        conn.connect();
+        REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Handshaking;
         }));

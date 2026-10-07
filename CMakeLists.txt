@@ -6,6 +6,7 @@ option(turboq_reactor_SANITIZER "Build with sanitizer" OFF)
 option(turboq_reactor_BUILD_TESTS "Build tests (*_test.cpp files, linked against doctest)" ON)
 option(turboq_reactor_TOOLS "Build tools (requires cxxopts, fetched via CPM)" ON)
 option(turboq_reactor_EXAMPLES "Build examples (requires cxxopts, fetched via CPM)" ON)
+option(turboq_reactor_WERROR "Treat warnings as errors in this project's code (CI)" OFF)
 
 include(cmake/TurboQReactorHelpers.cmake)
 include(cmake/GetCPM.cmake)
@@ -23,6 +24,11 @@ CPMAddPackage(
 if (turboq_reactor_BUILD_TESTS)
     CPMAddPackage("gh:doctest/doctest@2.5.2")
     enable_testing()
+endif()
+
+# After the dependencies: only this project's targets are affected.
+if (turboq_reactor_WERROR)
+    add_compile_options(-Werror)
 endif()
 
 add_subdirectory(code)
