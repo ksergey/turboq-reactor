@@ -1,0 +1,108 @@
+// Copyright (c) Sergey Kovalevich <inndie@gmail.com>
+// SPDX-License-Identifier: MIT
+
+#pragma once
+
+#include <string>
+#include <system_error>
+
+#include <turboq/Error.h>
+
+namespace turboq::reactor {
+
+using turboq::makePosixErrorCode;
+
+enum class Error {
+    InvalidOptions = 1,
+    InvalidState,
+    AddressResolutionFailed,
+    ConnectTimeout,
+    ClosedByPeer,
+    SubmissionQueueFull,
+    TlsHandshakeFailed,
+    TlsHandshakeTimeout,
+    KernelTlsUnavailable,
+    TlsKeyUpdateUnsupported,
+    TlsUnexpectedRecord,
+    WsInvalidUrl,
+    WsHandshakeFailed,
+    WsHandshakeTimeout,
+    WsProtocolError,
+    WsMessageTooBig,
+};
+
+struct ErrorCategory final : public std::error_category {
+    constexpr ErrorCategory() = default;
+
+    [[nodiscard]] auto name() const noexcept -> char const* override {
+        return "turboq::reactor::Error";
+    }
+
+    [[nodiscard]] auto message(int error) const -> std::string override {
+        switch (static_cast<Error>(error)) {
+        case Error::InvalidOptions: return "invalid options";
+        case Error::InvalidState: return "operation is not allowed in the current state";
+        case Error::AddressResolutionFailed: return "failed to resolve address";
+        case Error::ConnectTimeout: return "connect timeout";
+        case Error::ClosedByPeer: return "connection closed by peer";
+        case Error::SubmissionQueueFull: return "io_uring submission queue is full";
+        case Error::TlsHandshakeFailed: return "TLS handshake failed";
+        case Error::TlsHandshakeTimeout: return "TLS handshake timeout";
+        case Error::KernelTlsUnavailable:
+            return "kernel TLS could not be enabled (tls kernel module, OpenSSL built with ktls, kTLS-capable cipher)";
+        case Error::TlsKeyUpdateUnsupported:
+            return "peer requested a TLS 1.3 key update, not supported with kernel TLS";
+        case Error::TlsUnexpectedRecord: return "unexpected TLS record";
+        case Error::WsInvalidUrl: return "invalid WebSocket URL";
+        case Error::WsHandshakeFailed: return "WebSocket upgrade rejected or invalid";
+        case Error::WsHandshakeTimeout: return "WebSocket upgrade timeout";
+        case Error::WsProtocolError: return "WebSocket protocol violation by the server";
+        case Error::WsMessageTooBig: return "WebSocket message does not fit into the receive buffer";
+        default: return "?";
+        }
+    }
+};
+
+[[nodiscard]] constexpr auto getErrorCategory() noexcept -> std::error_category const& {
+    static ErrorCategory errorCategory;
+    return errorCategory;
+}
+
+[[nodiscard]] inline auto makeErrorCode(Error e) noexcept -> std::error_code {
+    return {static_cast<int>(e), getErrorCategory()};
+}
+
+/// Close codes received in a WebSocket Close frame (RFC 6455 7.4).
+struct WsCloseCategory final : public std::error_category {
+    constexpr WsCloseCategory() = default;
+
+    [[nodiscard]] auto name() const noexcept -> char const* override {
+        return "turboq::reactor::WsClose";
+    }
+
+    [[nodiscard]] auto message(int code) const -> std::string override {
+        std::string text = "WebSocket closed by peer: " + std::to_string(code);
+        switch (code) {
+        case 1000: return text + " (normal closure)";
+        case 1001: return text + " (going away)";
+        case 1002: return text + " (protocol error)";
+        case 1003: return text + " (unsupported data)";
+        case 1005: return text + " (no status code)";
+        case 1007: return text + " (invalid payload data)";
+        case 1008: return text + " (policy violation)";
+        case 1009: return text + " (message too big)";
+        case 1010: return text + " (mandatory extension)";
+        case 1011: return text + " (internal error)";
+        case 1012: return text + " (service restart)";
+        case 1013: return text + " (try again later)";
+        default: return text;
+        }
+    }
+};
+
+[[nodiscard]] constexpr auto getWsCloseCategory() noexcept -> std::error_category const& {
+    static WsCloseCategory category;
+    return category;
+}
+
+} // namespace turboq::reactor
