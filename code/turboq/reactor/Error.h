@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #include <turboq/Error.h>
@@ -21,7 +22,11 @@ enum class Error {
     SubmissionQueueFull,
     TlsHandshakeFailed,
     TlsHandshakeTimeout,
-    KernelTlsUnavailable,
+    KernelTlsModuleMissing,
+    OpenSslWithoutKtls,
+    KernelTlsSendUnavailable,
+    KernelTlsReceiveUnavailable,
+    KernelTlsCipherUnsupported,
     TlsKeyUpdateUnsupported,
     TlsUnexpectedRecord,
     WsInvalidUrl,
@@ -48,8 +53,14 @@ struct ErrorCategory final : public std::error_category {
         case Error::SubmissionQueueFull: return "io_uring submission queue is full";
         case Error::TlsHandshakeFailed: return "TLS handshake failed";
         case Error::TlsHandshakeTimeout: return "TLS handshake timeout";
-        case Error::KernelTlsUnavailable:
-            return "kernel TLS could not be enabled (tls kernel module, OpenSSL built with ktls, kTLS-capable cipher)";
+        case Error::KernelTlsModuleMissing:
+            return "the tls kernel module is not loaded (sudo modprobe tls; to load it at boot: "
+                   "echo tls | sudo tee /etc/modules-load.d/tls.conf)";
+        case Error::OpenSslWithoutKtls: return "OpenSSL was built without kernel TLS support (OPENSSL_NO_KTLS)";
+        case Error::KernelTlsSendUnavailable:
+            return "OpenSSL did not hand the TLS session to the kernel (see describeKernelTlsSupport())";
+        case Error::KernelTlsReceiveUnavailable: return "kernel TLS receive side could not be set up";
+        case Error::KernelTlsCipherUnsupported: return "the negotiated cipher is not supported by kernel TLS";
         case Error::TlsKeyUpdateUnsupported:
             return "peer requested a TLS 1.3 key update, not supported with kernel TLS";
         case Error::TlsUnexpectedRecord: return "unexpected TLS record";
@@ -104,5 +115,28 @@ struct WsCloseCategory final : public std::error_category {
     static WsCloseCategory category;
     return category;
 }
+
+// TLS error categories and kernel TLS diagnostics (implemented in detail/Tls.cpp).
+
+/// OpenSSL library errors (ERR_get_error()), packed as (lib << 23) | reason.
+[[nodiscard]] auto getTlsErrorCategory() noexcept -> std::error_category const&;
+
+/// Certificate verification errors (X509_V_ERR_*).
+[[nodiscard]] auto getX509ErrorCategory() noexcept -> std::error_category const&;
+
+/// Fatal alerts received from the peer (TLS AlertDescription).
+[[nodiscard]] auto getTlsAlertCategory() noexcept -> std::error_category const&;
+
+/// setsockopt(TLS_RX) rejected by the kernel; the value is the errno.
+[[nodiscard]] auto getKernelTlsRxErrorCategory() noexcept -> std::error_category const&;
+
+/// One line describing what kernel TLS needs and what is there, for logs when a TLS connection
+/// fails with a kernel TLS error: OpenSSL version and whether it was built with ktls, whether the
+/// tls module is loaded, whether this process could load it on demand (CAP_NET_ADMIN).
+[[nodiscard]] auto describeKernelTlsSupport() -> std::string;
+
+/// True for the errors that mean "kernel TLS is not usable here" (as opposed to network or
+/// certificate problems).
+[[nodiscard]] auto isKernelTlsError(std::error_code ec) noexcept -> bool;
 
 } // namespace turboq::reactor

@@ -10,7 +10,10 @@
 #include <cstdint>
 #include <expected>
 #include <span>
+#include <string>
 #include <system_error>
+
+#include "../Error.h"
 
 struct ssl_st;
 struct ssl_ctx_st;
@@ -19,16 +22,16 @@ namespace turboq::reactor {
 
 struct TlsOptions;
 
-/// OpenSSL library errors (ERR_get_error()), packed as (lib << 23) | reason.
-[[nodiscard]] auto getTlsErrorCategory() noexcept -> std::error_category const&;
-
-/// Certificate verification errors (X509_V_ERR_*).
-[[nodiscard]] auto getX509ErrorCategory() noexcept -> std::error_category const&;
-
-/// Fatal alerts received from the peer (TLS AlertDescription).
-[[nodiscard]] auto getTlsAlertCategory() noexcept -> std::error_category const&;
-
 namespace detail {
+
+/// What the running system offers for kernel TLS.
+struct KernelTlsSupport {
+    bool opensslKtls;   // libssl compiled with ktls
+    bool moduleLoaded;  // "tls" listed in /proc/sys/net/ipv4/tcp_available_ulp
+    bool canLoadModule; // CAP_NET_ADMIN: the kernel autoloads the module on first use
+};
+
+[[nodiscard]] auto probeKernelTlsSupport() noexcept -> KernelTlsSupport;
 
 /// Pop the most relevant error from OpenSSL's thread-local error queue (and clear the rest).
 /// Returns `fallback` when the queue is empty.

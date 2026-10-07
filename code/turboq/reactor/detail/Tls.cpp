@@ -3,7 +3,12 @@
 
 #include "Tls.h"
 
+#include <linux/capability.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
 #include <openssl/core_names.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/kdf.h>
 #include <openssl/ssl.h>
@@ -11,6 +16,7 @@
 
 #include <array>
 #include <cstring>
+#include <fstream>
 #include <string>
 
 #include "../Error.h"
@@ -40,6 +46,16 @@ struct TlsErrorCategory final : public std::error_category {
         result += ": ";
         result += reasonString ? reasonString : ("reason " + std::to_string(reason));
         return result;
+    }
+};
+
+struct KernelTlsRxErrorCategory final : public std::error_category {
+    [[nodiscard]] auto name() const noexcept -> char const* override {
+        return "turboq::reactor::KernelTlsRxError";
+    }
+
+    [[nodiscard]] auto message(int value) const -> std::string override {
+        return "the kernel refused the TLS receive key: " + std::generic_category().message(value);
     }
 };
 
@@ -116,6 +132,43 @@ auto getTlsErrorCategory() noexcept -> std::error_category const& {
     return category;
 }
 
+auto getKernelTlsRxErrorCategory() noexcept -> std::error_category const& {
+    static KernelTlsRxErrorCategory category;
+    return category;
+}
+
+auto isKernelTlsError(std::error_code ec) noexcept -> bool {
+    if (ec.category() == getKernelTlsRxErrorCategory()) {
+        return true;
+    }
+    if (ec.category() != getErrorCategory()) {
+        return false;
+    }
+    switch (static_cast<Error>(ec.value())) {
+    case Error::KernelTlsModuleMissing:
+    case Error::OpenSslWithoutKtls:
+    case Error::KernelTlsSendUnavailable:
+    case Error::KernelTlsReceiveUnavailable:
+    case Error::KernelTlsCipherUnsupported: return true;
+    default: return false;
+    }
+}
+
+auto describeKernelTlsSupport() -> std::string {
+    auto const support = detail::probeKernelTlsSupport();
+    std::string result = ::OpenSSL_version(OPENSSL_VERSION);
+    result += support.opensslKtls ? " (built with ktls)" : " (built WITHOUT ktls)";
+    result += "; tls kernel module: ";
+    if (support.moduleLoaded) {
+        result += "loaded";
+    } else if (support.canLoadModule) {
+        result += "not loaded, loads on first use (CAP_NET_ADMIN)";
+    } else {
+        result += "NOT loaded (sudo modprobe tls)";
+    }
+    return result;
+}
+
 auto getX509ErrorCategory() noexcept -> std::error_category const& {
     static X509ErrorCategory category;
     return category;
@@ -127,6 +180,27 @@ auto getTlsAlertCategory() noexcept -> std::error_category const& {
 }
 
 namespace detail {
+
+auto probeKernelTlsSupport() noexcept -> KernelTlsSupport {
+    KernelTlsSupport support{};
+#ifndef OPENSSL_NO_KTLS
+    support.opensslKtls = true;
+#endif
+    try {
+        std::ifstream file{"/proc/sys/net/ipv4/tcp_available_ulp"};
+        std::string ulp;
+        while (file >> ulp) {
+            support.moduleLoaded = support.moduleLoaded || ulp == "tls";
+        }
+    } catch (...) {}
+    __user_cap_header_struct header{};
+    header.version = _LINUX_CAPABILITY_VERSION_3;
+    __user_cap_data_struct data[_LINUX_CAPABILITY_U32S_3]{};
+    if (::syscall(SYS_capget, &header, data) == 0) {
+        support.canLoadModule = (data[CAP_TO_INDEX(CAP_NET_ADMIN)].effective & CAP_TO_MASK(CAP_NET_ADMIN)) != 0;
+    }
+    return support;
+}
 
 auto popTlsError(std::error_code fallback) noexcept -> std::error_code {
     // The first error in the queue is the root cause, later ones add context.
@@ -208,7 +282,7 @@ auto makeTls13CryptoInfo(std::uint16_t cipherSuite, std::span<std::uint8_t const
         digest = "SHA256";
         keySize = TLS_CIPHER_CHACHA20_POLY1305_KEY_SIZE;
         break;
-    default: return std::unexpected(makeErrorCode(Error::KernelTlsUnavailable));
+    default: return std::unexpected(makeErrorCode(Error::KernelTlsCipherUnsupported));
     }
 
     std::array<std::uint8_t, 32> key{};
@@ -216,7 +290,7 @@ auto makeTls13CryptoInfo(std::uint16_t cipherSuite, std::span<std::uint8_t const
     if (!hkdfExpandLabel(digest, trafficSecret, "key", std::span{key}.first(keySize)) ||
         !hkdfExpandLabel(digest, trafficSecret, "iv", iv)) {
         ::OPENSSL_cleanse(key.data(), key.size());
-        return std::unexpected(popTlsError(makeErrorCode(Error::KernelTlsUnavailable)));
+        return std::unexpected(popTlsError(makeErrorCode(Error::KernelTlsReceiveUnavailable)));
     }
 
     // The kernel splits the nonce base into a 4-byte salt and an 8-byte "iv" for the GCM ciphers,

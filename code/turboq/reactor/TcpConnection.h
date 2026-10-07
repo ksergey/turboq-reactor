@@ -38,7 +38,8 @@ enum class TlsVersion : std::uint8_t { Tls12, Tls13 };
 /// TLS on top of a TCP connection. OpenSSL performs the handshake, then the kernel (kTLS) takes
 /// over both directions: rx/tx carry plaintext and the data path is exactly the same as for plain
 /// TCP. If the kernel can't take over (no `tls` module, OpenSSL built without ktls), the
-/// connection fails with Error::KernelTlsUnavailable; there is no userspace fallback.
+/// connection fails with a kernel TLS error (isKernelTlsError(), describeKernelTlsSupport() for
+/// the details); there is no userspace fallback.
 struct TlsOptions {
     bool enabled = false;
     /// SNI and the name the certificate is verified against. Empty means TcpOptions::host.

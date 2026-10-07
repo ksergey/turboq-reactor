@@ -242,8 +242,12 @@ public:
 
     /// Connecting (TCP), Handshaking (TLS handshake or HTTP upgrade), Ready, Closing, Closed.
     [[nodiscard]] auto state() const noexcept -> ConnectionState {
-        if (state_ == ConnectionState::Connecting && tcp_.state() == ConnectionState::Handshaking) {
-            return ConnectionState::Handshaking;
+        if (state_ == ConnectionState::Connecting) {
+            // TCP/TLS phase: report the transport's progress (it may already be failing).
+            auto const transport = tcp_.state();
+            if (transport == ConnectionState::Handshaking || transport == ConnectionState::Closing) {
+                return transport;
+            }
         }
         return state_;
     }

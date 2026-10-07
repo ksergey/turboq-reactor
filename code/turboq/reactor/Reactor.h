@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "Error.h"
 #include "TcpConnection.h"
 #include "UdpConnection.h"
 #include "WsConnection.h"

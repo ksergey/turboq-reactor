@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 #include <arpa/inet.h>
+#include <linux/capability.h>
 #include <linux/tls.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <openssl/err.h>
@@ -281,7 +283,7 @@ TEST_SUITE("TlsConnection") {
 
             if (!ktls) {
                 REQUIRE_EQ(conn.state(), ConnectionState::Closed);
-                REQUIRE_EQ(conn.error(), makeErrorCode(Error::KernelTlsUnavailable));
+                REQUIRE(isKernelTlsError(conn.error()));
                 server.join();
                 REQUIRE(server.handshakeOk);
                 continue;
@@ -330,6 +332,37 @@ TEST_SUITE("TlsConnection") {
         REQUIRE(server.scriptOk);
     }
 
+    TEST_CASE("missing tls module is reported before talking to the server") {
+        if (detail::probeKernelTlsSupport().moduleLoaded) {
+            MESSAGE("the tls module is loaded here, skipping");
+            return;
+        }
+        // Drop CAP_NET_ADMIN from this thread's effective set: the module can't be autoloaded.
+        __user_cap_header_struct header{_LINUX_CAPABILITY_VERSION_3, 0};
+        __user_cap_data_struct saved[_LINUX_CAPABILITY_U32S_3]{};
+        REQUIRE_EQ(::syscall(SYS_capget, &header, saved), 0);
+        auto dropped = std::to_array(saved);
+        dropped[CAP_TO_INDEX(CAP_NET_ADMIN)].effective &= ~CAP_TO_MASK(CAP_NET_ADMIN);
+        REQUIRE_EQ(::syscall(SYS_capset, &header, dropped.data()), 0);
+        REQUIRE_FALSE(detail::probeKernelTlsSupport().canLoadModule);
+
+        TestCertificate certificate;
+        TlsServer server{certificate.serverContext()};
+        Reactor reactor;
+        TcpConnection conn{reactor, {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true}}};
+        REQUIRE(conn.connect());
+        REQUIRE(pollUntil(reactor, [&] {
+            return conn.state() == ConnectionState::Closed;
+        }));
+        REQUIRE_EQ(conn.error(), makeErrorCode(Error::KernelTlsModuleMissing));
+        REQUIRE(conn.tlsVersion().empty()); // no handshake was attempted
+        REQUIRE(describeKernelTlsSupport().find("NOT loaded") != std::string::npos);
+
+        REQUIRE_EQ(::syscall(SYS_capset, &header, saved), 0);
+        server.join();
+        REQUIRE_FALSE(server.handshakeOk);
+    }
+
     TEST_CASE("untrusted certificate is rejected") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
@@ -372,7 +405,7 @@ TEST_SUITE("TlsConnection") {
         server.join();
         REQUIRE(server.handshakeOk);
         if (conn.state() == ConnectionState::Closed) {
-            REQUIRE_EQ(conn.error(), makeErrorCode(Error::KernelTlsUnavailable));
+            REQUIRE(isKernelTlsError(conn.error()));
         }
     }
 

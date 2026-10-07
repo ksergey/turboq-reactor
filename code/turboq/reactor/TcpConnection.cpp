@@ -438,6 +438,18 @@ void TcpCore::resumeRecv() noexcept {
 void TcpCore::startHandshake() noexcept {
     state_ = ConnectionState::Handshaking;
 
+    // Fail before talking to the server when kernel TLS can't work anyway: every pointless
+    // handshake costs the exchange's connection rate limit.
+    auto const support = detail::probeKernelTlsSupport();
+    if (!support.opensslKtls) {
+        this->fail(makeErrorCode(Error::OpenSslWithoutKtls));
+        return;
+    }
+    if (!support.moduleLoaded && !support.canLoadModule) {
+        this->fail(makeErrorCode(Error::KernelTlsModuleMissing));
+        return;
+    }
+
     // OpenSSL drives the handshake on the socket itself; io_uring only tells us when to retry.
     if (auto ec = setNonBlocking(fd_, true)) {
         this->fail(ec);
@@ -547,7 +559,11 @@ void TcpCore::completeHandshake() noexcept {
     tlsCipher_ = ::SSL_CIPHER_get_name(::SSL_get_current_cipher(ssl_));
 
     if (BIO_get_ktls_send(::SSL_get_wbio(ssl_)) != 1) {
-        this->fail(makeErrorCode(Error::KernelTlsUnavailable));
+        // OpenSSL skips kTLS silently. The usual reason is a module that could not be loaded
+        // (e.g. a kernel without CONFIG_TLS); otherwise the OpenSSL build or the cipher.
+        auto const support = detail::probeKernelTlsSupport();
+        this->fail(
+            makeErrorCode(support.moduleLoaded ? Error::KernelTlsSendUnavailable : Error::KernelTlsModuleMissing));
         return;
     }
     if (BIO_get_ktls_recv(::SSL_get_rbio(ssl_)) != 1) {
@@ -555,7 +571,7 @@ void TcpCore::completeHandshake() noexcept {
         // receive side ourselves from the server traffic secret. Nothing has been read with that
         // secret yet (no read-ahead, handshake just finished), so the record sequence is 0.
         if (::SSL_version(ssl_) != TLS1_3_VERSION || serverTrafficSecretSize_ == 0 || ::SSL_has_pending(ssl_)) {
-            this->fail(makeErrorCode(Error::KernelTlsUnavailable));
+            this->fail(makeErrorCode(Error::KernelTlsReceiveUnavailable));
             return;
         }
         auto const cipherSuite = static_cast<std::uint16_t>(::SSL_CIPHER_get_id(::SSL_get_current_cipher(ssl_)));
@@ -567,9 +583,10 @@ void TcpCore::completeHandshake() noexcept {
             return;
         }
         int const rc = ::setsockopt(fd_, SOL_TLS, TLS_RX, info->bytes.data(), info->size);
+        int const savedErrno = errno;
         ::OPENSSL_cleanse(&*info, sizeof(*info));
         if (rc != 0) {
-            this->fail(makeErrorCode(Error::KernelTlsUnavailable));
+            this->fail({savedErrno, getKernelTlsRxErrorCategory()});
             return;
         }
     }

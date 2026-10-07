@@ -125,6 +125,7 @@ private:
     Clock::time_point reconnectAt_{};
     bool reconnectPending_{false};
     bool stopping_{false};
+    bool kernelTlsHintShown_{false};
     std::uint64_t sessions_{0};
 
 public:
@@ -228,6 +229,11 @@ private:
             if (auto const ec = ws_.error()) {
                 std::println(stderr, "{} disconnected: {}{}{}", formatTime(realtimeNs()), ec.message(),
                     ws_.closeReason().empty() ? "" : ", reason: ", ws_.closeReason());
+                if (isKernelTlsError(ec) && !kernelTlsHintShown_) {
+                    // Configuration problem, not a network one: say what is missing, once.
+                    std::println(stderr, "{} kernel TLS: {}", formatTime(realtimeNs()), describeKernelTlsSupport());
+                    kernelTlsHintShown_ = true;
+                }
                 if (ws_.httpStatus() != 0 && ws_.httpStatus() != 101) {
                     std::println(
                         stderr, "{} upgrade rejected with HTTP {}", formatTime(realtimeNs()), ws_.httpStatus());

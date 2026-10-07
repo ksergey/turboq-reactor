@@ -140,8 +140,13 @@ if (!ws.connect()) { /* ws.error() says why */ }
   with a `getTlsAlertCategory()` error. `close()` sends `close_notify`.
 * A TLS 1.3 KeyUpdate from the server can't be followed once the kernel owns the keys: the
   connection fails with `Error::TlsKeyUpdateUnsupported`. Exchanges rarely send them; reconnect.
-* No userspace fallback: if the kernel can't take over, the connection fails with
-  `Error::KernelTlsUnavailable` right after the handshake.
+* No userspace fallback: if the kernel can't take over, the connection fails with a kernel TLS
+  error (`isKernelTlsError()`): `KernelTlsModuleMissing` (reported *before* the handshake when
+  the `tls` module is not loaded and the process can't load it, so no exchange connection is
+  wasted), `OpenSslWithoutKtls`, `KernelTlsSendUnavailable`, `KernelTlsCipherUnsupported`,
+  `KernelTlsReceiveUnavailable` or a `getKernelTlsRxErrorCategory()` errno.
+  `describeKernelTlsSupport()` returns a one-line diagnosis for logs, e.g.
+  `OpenSSL 3.0.13 30 Jan 2024 (built with ktls); tls kernel module: NOT loaded (sudo modprobe tls)`.
 * Errors: `getX509ErrorCategory()` for certificate verification, `getTlsErrorCategory()` for
   OpenSSL errors.
 * SIGPIPE raised by OpenSSL's writes during the handshake is blocked and swallowed.
