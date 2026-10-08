@@ -1,7 +1,9 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
-#include "UdpConnection.h"
+#include "UDPConnection.h"
+
+#include <liburing.h> // io_uring_recvmsg_out: the layout of received datagrams (both backends)
 
 #include <linux/errqueue.h>
 #include <linux/net_tstamp.h>
@@ -36,42 +38,6 @@ constexpr unsigned kMaxBufferCount = 32768; // io_uring provided buffer ring lim
     return MappedRegion{static_cast<std::byte*>(addr), size};
 }
 
-[[nodiscard]] auto resolve(std::string const& host, std::uint16_t port, bool numeric, sockaddr_storage& address,
-    socklen_t& addressLength) noexcept -> std::error_code {
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags = AI_NUMERICSERV | (numeric ? AI_NUMERICHOST : 0);
-
-    auto const service = std::to_string(port);
-    addrinfo* result = nullptr;
-    if (::getaddrinfo(host.c_str(), service.c_str(), &hints, &result) != 0 || result == nullptr) {
-        return makeErrorCode(Error::AddressResolutionFailed);
-    }
-    std::memcpy(&address, result->ai_addr, result->ai_addrlen);
-    addressLength = result->ai_addrlen;
-    ::freeaddrinfo(result);
-    return {};
-}
-
-/// Wildcard address of the given family.
-void makeWildcard(int family, std::uint16_t port, sockaddr_storage& address, socklen_t& addressLength) noexcept {
-    std::memset(&address, 0, sizeof(address));
-    if (family == AF_INET6) {
-        auto& in6 = reinterpret_cast<sockaddr_in6&>(address);
-        in6.sin6_family = AF_INET6;
-        in6.sin6_addr = in6addr_any;
-        in6.sin6_port = htons(port);
-        addressLength = sizeof(sockaddr_in6);
-    } else {
-        auto& in = reinterpret_cast<sockaddr_in&>(address);
-        in.sin_family = AF_INET;
-        in.sin_addr.s_addr = htonl(INADDR_ANY);
-        in.sin_port = htons(port);
-        addressLength = sizeof(sockaddr_in);
-    }
-}
-
 [[nodiscard]] auto setOption(
     int fd, int level, int name, void const* value, socklen_t length) noexcept -> std::error_code {
     if (::setsockopt(fd, level, name, value, length) != 0) {
@@ -84,20 +50,21 @@ void makeWildcard(int family, std::uint16_t port, sockaddr_storage& address, soc
     return setOption(fd, level, name, &value, sizeof(value));
 }
 
-[[nodiscard]] auto toNs(timespec const& ts) noexcept -> std::uint64_t {
-    return static_cast<std::uint64_t>(ts.tv_sec) * 1'000'000'000u + static_cast<std::uint64_t>(ts.tv_nsec);
+[[nodiscard]] auto toTimestamp(timespec const& ts) noexcept -> Timestamp {
+    return Timestamp{std::chrono::seconds{ts.tv_sec} + std::chrono::nanoseconds{ts.tv_nsec}};
 }
 
 } // namespace
 
 namespace detail {
 
-UdpCore::UdpCore(Ring& ring, UdpOptions options, std::uint16_t bufferGroupId)
-    : ring_{ring}, options_{std::move(options)}, bufferGroupId_{bufferGroupId},
+template <typename Backend>
+UDPCore<Backend>::UDPCore(Backend& ring, UDPOptions options)
+    : ring_{ring}, options_{std::move(options)},
       bufferCount_{upperPow2(std::clamp(options_.bufferCount, 1u, kMaxBufferCount))} {
     if (options_.maxDatagramSize == 0 || options_.maxDatagramSize > 65535 || options_.txBufferSize == 0 ||
         options_.txQueueDepth == 0) {
-        throw std::system_error{makeErrorCode(Error::InvalidOptions), "UdpCore"};
+        throw std::system_error{makeErrorCode(Error::InvalidOptions), "UDPCore"};
     }
 
     // Every receive buffer holds io_uring_recvmsg_out + sender address + control messages + payload.
@@ -110,9 +77,7 @@ UdpCore::UdpCore(Ring& ring, UdpOptions options, std::uint16_t bufferGroupId)
                                           recvTemplate_.msg_controllen + options_.maxDatagramSize);
     bufferStride_ = alignUp<std::size_t>(bufferLength_, kCacheLineSize);
 
-    auto const pageSize = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
     buffers_ = mapAnonymous(bufferCount_ * bufferStride_);
-    bufferRingMemory_ = mapAnonymous(alignUp<std::size_t>(bufferCount_ * sizeof(io_uring_buf), pageSize));
 
     rxEntries_ = std::make_unique<Entry[]>(bufferCount_);
 
@@ -124,47 +89,30 @@ UdpCore::UdpCore(Ring& ring, UdpOptions options, std::uint16_t bufferGroupId)
     txLengths_.resize(upperPow2(std::size_t{options_.txQueueDepth}));
     txMask_ = txLengths_.size() - 1;
 
-    // Last step, so that a throwing constructor never leaves a registered ring behind. The ring is
-    // unregistered in onRetired() (or goes away with the io_uring instance).
-    bufferRing_ = reinterpret_cast<io_uring_buf_ring*>(bufferRingMemory_.data());
-    ::io_uring_buf_ring_init(bufferRing_);
-    io_uring_buf_reg reg{};
-    reg.ring_addr = reinterpret_cast<std::uint64_t>(bufferRing_);
-    reg.ring_entries = bufferCount_;
-    reg.bgid = bufferGroupId_;
-    if (int const rc = ::io_uring_register_buf_ring(ring_.native(), &reg, 0); rc < 0) {
-        throw std::system_error{makePosixErrorCode(-rc), "io_uring_register_buf_ring"};
-    }
-    auto const mask = ::io_uring_buf_ring_mask(bufferCount_);
-    for (unsigned i = 0; i < bufferCount_; ++i) {
-        ::io_uring_buf_ring_add(bufferRing_, buffers_.data() + i * bufferStride_, bufferLength_,
-            static_cast<unsigned short>(i), mask, static_cast<int>(i));
-    }
-    ::io_uring_buf_ring_advance(bufferRing_, static_cast<int>(bufferCount_));
+    // Last step, so that a throwing constructor never leaves registered buffers behind. They are
+    // unregistered in onRetired() (or go away with the backend).
+    pool_.emplace(ring_, buffers_.data(), bufferStride_, bufferLength_, bufferCount_);
 }
 
-auto UdpCore::create(Ring& ring, UdpOptions options) -> UdpCore* {
-    auto const bufferGroupId = ring.allocateBufferGroup();
-    try {
-        return new UdpCore{ring, std::move(options), bufferGroupId};
-    } catch (...) {
-        ring.releaseBufferGroup(bufferGroupId);
-        throw;
-    }
+template <typename Backend>
+auto UDPCore<Backend>::create(Backend& ring, UDPOptions options) -> UDPCore* {
+    return new UDPCore{ring, std::move(options)};
 }
 
-void UdpCore::onRetired() noexcept {
-    ::io_uring_unregister_buf_ring(ring_.native(), bufferGroupId_);
-    ring_.releaseBufferGroup(bufferGroupId_);
+template <typename Backend>
+void UDPCore<Backend>::onRetired() noexcept {
+    pool_->release();
 }
 
-UdpCore::~UdpCore() noexcept {
+template <typename Backend>
+UDPCore<Backend>::~UDPCore() noexcept {
     if (fd_ >= 0) {
         ::close(fd_);
     }
 }
 
-auto UdpCore::open() -> std::expected<void, std::error_code> {
+template <typename Backend>
+auto UDPCore<Backend>::open() -> std::expected<void, std::error_code> {
     if (state_ != ConnectionState::Idle && state_ != ConnectionState::Closed) {
         return std::unexpected(makeErrorCode(Error::InvalidState));
     }
@@ -185,47 +133,35 @@ auto UdpCore::open() -> std::expected<void, std::error_code> {
     error_.clear();
     remoteLength_ = 0;
 
-    sockaddr_storage group{}, source{}, local{};
-    socklen_t groupLength = 0, sourceLength = 0, localLength = 0;
-    bool const multicast = !options_.group.empty();
-
-    if (multicast) {
-        if (auto ec = resolve(options_.group, options_.localPort, true, group, groupLength)) {
-            return this->failSync(ec);
-        }
-        if (!options_.source.empty()) {
-            if (auto ec = resolve(options_.source, 0, true, source, sourceLength)) {
-                return this->failSync(ec);
-            }
-        }
-    }
-    if (!options_.remoteAddress.empty()) {
-        if (auto ec = resolve(options_.remoteAddress, options_.remotePort, false, remote_, remoteLength_)) {
-            return this->failSync(ec);
-        }
-    }
-    if (!options_.localAddress.empty()) {
-        if (auto ec = resolve(options_.localAddress, options_.localPort, true, local, localLength)) {
-            return this->failSync(ec);
-        }
-    }
-
-    int family = AF_INET;
-    if (multicast) {
-        family = group.ss_family;
-    } else if (localLength > 0) {
-        family = local.ss_family;
-    } else if (remoteLength_ > 0) {
-        family = remote_.ss_family;
-    }
-    if ((localLength > 0 && local.ss_family != family) || (remoteLength_ > 0 && remote_.ss_family != family) ||
-        (sourceLength > 0 && source.ss_family != family)) {
+    auto const& group = options_.group;
+    auto const& source = options_.source;
+    auto const& local = options_.local;
+    auto const& remote = options_.remote;
+    if ((group && !group->address.isMulticast()) || (source && !group)) {
         return this->failSync(makeErrorCode(Error::InvalidOptions));
     }
 
+    // The family comes from the group, an explicit local address or the destination; everything
+    // given must agree on it.
+    int family = AF_INET;
+    if (group) {
+        family = group->address.family();
+    } else if (local) {
+        family = local->address.family();
+    } else if (remote) {
+        family = remote->address.family();
+    }
+    if ((local && local->address.family() != family) || (remote && remote->address.family() != family) ||
+        (source && source->family() != family)) {
+        return this->failSync(makeErrorCode(Error::InvalidOptions));
+    }
+    if (remote) {
+        remoteLength_ = remote->toSockaddr(remote_);
+    }
+
     unsigned interfaceIndex = 0;
-    if (!options_.interface.empty()) {
-        interfaceIndex = ::if_nametoindex(options_.interface.c_str());
+    if (options_.interface) {
+        interfaceIndex = ::if_nametoindex(options_.interface->c_str());
         if (interfaceIndex == 0) {
             return this->failSync(makePosixErrorCode(errno));
         }
@@ -241,15 +177,15 @@ auto UdpCore::open() -> std::expected<void, std::error_code> {
             return this->failSync(ec);
         }
     }
-    if (options_.socketRecvBufferSize > 0) {
-        if (setIntOption(fd_, SOL_SOCKET, SO_RCVBUFFORCE, options_.socketRecvBufferSize)) {
-            if (auto ec = setIntOption(fd_, SOL_SOCKET, SO_RCVBUF, options_.socketRecvBufferSize)) {
+    if (options_.socketRecvBufferSize) {
+        if (setIntOption(fd_, SOL_SOCKET, SO_RCVBUFFORCE, *options_.socketRecvBufferSize)) {
+            if (auto ec = setIntOption(fd_, SOL_SOCKET, SO_RCVBUF, *options_.socketRecvBufferSize)) {
                 return this->failSync(ec);
             }
         }
     }
-    if (options_.socketSendBufferSize > 0) {
-        if (auto ec = setIntOption(fd_, SOL_SOCKET, SO_SNDBUF, options_.socketSendBufferSize)) {
+    if (options_.socketSendBufferSize) {
+        if (auto ec = setIntOption(fd_, SOL_SOCKET, SO_SNDBUF, *options_.socketSendBufferSize)) {
             return this->failSync(ec);
         }
     }
@@ -300,35 +236,39 @@ auto UdpCore::open() -> std::expected<void, std::error_code> {
     }
 
     // Bind.
-    sockaddr_storage bindAddress{};
-    socklen_t bindLength = 0;
-    if (multicast && options_.bindToGroup) {
-        bindAddress = group;
-        bindLength = groupLength;
-    } else if (localLength > 0) {
-        bindAddress = local;
-        bindLength = localLength;
-    } else {
-        makeWildcard(family, options_.localPort, bindAddress, bindLength);
+    // No local endpoint: the wildcard address of the family and an ephemeral port.
+    Endpoint bindTo =
+        local.value_or(Endpoint{family == AF_INET6 ? IPAddress{IPv6Address::any()} : IPAddress{IPv4Address::any()}, 0});
+    if (group) {
+        bindTo.port = group->port;
+        if (options_.bindToGroup) {
+            bindTo.address = group->address;
+        }
     }
+    sockaddr_storage bindAddress{};
+    socklen_t const bindLength = bindTo.toSockaddr(bindAddress);
     if (::bind(fd_, reinterpret_cast<sockaddr const*>(&bindAddress), bindLength) != 0) {
         return this->failSync(makePosixErrorCode(errno));
     }
 
     // Join (RFC 3678 protocol-independent API: works for both families, by interface index).
-    if (multicast) {
+    if (group) {
+        sockaddr_storage groupAddress{};
+        socklen_t const groupLength = group->toSockaddr(groupAddress);
         int const level = family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
         std::error_code ec;
-        if (sourceLength > 0) {
+        if (source) {
+            sockaddr_storage sourceAddress{};
+            socklen_t const sourceLength = Endpoint{*source, 0}.toSockaddr(sourceAddress);
             group_source_req req{};
             req.gsr_interface = interfaceIndex;
-            std::memcpy(&req.gsr_group, &group, groupLength);
-            std::memcpy(&req.gsr_source, &source, sourceLength);
+            std::memcpy(&req.gsr_group, &groupAddress, groupLength);
+            std::memcpy(&req.gsr_source, &sourceAddress, sourceLength);
             ec = setOption(fd_, level, MCAST_JOIN_SOURCE_GROUP, &req, sizeof(req));
         } else {
             group_req req{};
             req.gr_interface = interfaceIndex;
-            std::memcpy(&req.gr_group, &group, groupLength);
+            std::memcpy(&req.gr_group, &groupAddress, groupLength);
             ec = setOption(fd_, level, MCAST_JOIN_GROUP, &req, sizeof(req));
         }
         if (ec) {
@@ -344,7 +284,8 @@ auto UdpCore::open() -> std::expected<void, std::error_code> {
     return {};
 }
 
-void UdpCore::close() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::close() noexcept {
     switch (state_) {
     case ConnectionState::Idle: state_ = ConnectionState::Closed; break;
     case ConnectionState::Connecting: [[fallthrough]];
@@ -355,31 +296,30 @@ void UdpCore::close() noexcept {
     }
 }
 
-auto UdpCore::localPort() const noexcept -> std::uint16_t {
+template <typename Backend>
+auto UDPCore<Backend>::localEndpoint() const noexcept -> Endpoint {
     if (fd_ < 0) {
-        return 0;
+        return {};
     }
     sockaddr_storage address{};
     socklen_t length = sizeof(address);
     if (::getsockname(fd_, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
-        return 0;
+        return {};
     }
-    if (address.ss_family == AF_INET6) {
-        return ntohs(reinterpret_cast<sockaddr_in6 const&>(address).sin6_port);
-    }
-    return ntohs(reinterpret_cast<sockaddr_in const&>(address).sin_port);
+    return Endpoint::fromSockaddr(reinterpret_cast<sockaddr const*>(&address), length).value_or(Endpoint{});
 }
 
-void UdpCore::onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept {
+template <typename Backend>
+void UDPCore<Backend>::onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept {
     switch (op) {
     case detail::OpCode::Recv: {
-        if (res >= 0 && (flags & IORING_CQE_F_BUFFER)) [[likely]] {
+        if (res >= 0 && (flags & detail::kCompletionBuffer)) [[likely]] {
             this->onDatagram(res, flags);
         } else if (res < 0 && res != -ENOBUFS && res != -ECANCELED && res != -EINTR) {
             // -ENOBUFS: every buffer is queued for the user; re-armed below or by consume().
             this->fail(makePosixErrorCode(-res));
         }
-        if (!(flags & IORING_CQE_F_MORE)) {
+        if (!(flags & detail::kCompletionMore)) {
             // The multishot request has terminated (out of buffers, error, cancel, or the kernel
             // just decided to stop): re-arm if still running.
             recvInFlight_ = false;
@@ -407,8 +347,8 @@ void UdpCore::onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t fl
     case detail::OpCode::Cancel: --inflight_; break;
 
     case detail::OpCode::Connect: [[fallthrough]];
-    case detail::OpCode::ConnectTimeout: [[fallthrough]];
-    case detail::OpCode::HandshakePoll: assert(false); break;
+    case detail::OpCode::Timer: [[fallthrough]];
+    case detail::OpCode::Poll: assert(false); break;
     }
 
     if (state_ == ConnectionState::Closing && inflight_ == 0) {
@@ -416,8 +356,9 @@ void UdpCore::onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t fl
     }
 }
 
-void UdpCore::onDatagram(std::int32_t res, std::uint32_t flags) noexcept {
-    auto const bufferId = static_cast<std::uint16_t>(flags >> IORING_CQE_BUFFER_SHIFT);
+template <typename Backend>
+void UDPCore<Backend>::onDatagram(std::int32_t res, std::uint32_t flags) noexcept {
+    auto const bufferId = static_cast<std::uint16_t>(flags >> detail::kCompletionBufferShift);
     auto* const buffer = buffers_.data() + std::size_t{bufferId} * bufferStride_;
 
     auto* const out = ::io_uring_recvmsg_validate(buffer, res, &recvTemplate_);
@@ -432,11 +373,12 @@ void UdpCore::onDatagram(std::int32_t res, std::uint32_t flags) noexcept {
     entry.payload = {static_cast<std::byte const*>(::io_uring_recvmsg_payload(out, &recvTemplate_)),
         ::io_uring_recvmsg_payload_length(out, res, &recvTemplate_)};
     entry.info = DatagramInfo{};
-    entry.info.receiveTimeNs = ring_.now();
+    entry.info.receiveTime = ring_.now();
     entry.info.truncated = (out->flags & MSG_TRUNC) != 0;
     if (out->namelen > 0) {
-        entry.info.source = static_cast<sockaddr const*>(::io_uring_recvmsg_name(out));
-        entry.info.sourceLength = std::min<socklen_t>(out->namelen, recvTemplate_.msg_namelen);
+        entry.info.source = Endpoint::fromSockaddr(static_cast<sockaddr const*>(::io_uring_recvmsg_name(out)),
+            std::min<socklen_t>(out->namelen, recvTemplate_.msg_namelen))
+                                .value_or(Endpoint{});
     }
 
     for (auto* cmsg = ::io_uring_recvmsg_cmsg_firsthdr(out, &recvTemplate_); cmsg != nullptr;
@@ -447,8 +389,8 @@ void UdpCore::onDatagram(std::int32_t res, std::uint32_t flags) noexcept {
         if (cmsg->cmsg_type == SCM_TIMESTAMPING) {
             scm_timestamping ts;
             std::memcpy(&ts, CMSG_DATA(cmsg), sizeof(ts));
-            entry.info.softwareTimestampNs = toNs(ts.ts[0]);
-            entry.info.hardwareTimestampNs = toNs(ts.ts[2]);
+            entry.info.softwareTimestamp = toTimestamp(ts.ts[0]);
+            entry.info.hardwareTimestamp = toTimestamp(ts.ts[2]);
         } else if (cmsg->cmsg_type == SO_RXQ_OVFL) {
             std::memcpy(&kernelDrops_, CMSG_DATA(cmsg), sizeof(kernelDrops_));
         }
@@ -457,11 +399,13 @@ void UdpCore::onDatagram(std::int32_t res, std::uint32_t flags) noexcept {
     ++rxTail_;
 }
 
-void UdpCore::onTxReady() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::onTxReady() noexcept {
     this->startSend();
 }
 
-auto UdpCore::failSync(std::error_code ec) noexcept -> std::unexpected<std::error_code> {
+template <typename Backend>
+auto UDPCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<std::error_code> {
     if (fd_ >= 0) {
         ::close(fd_);
         fd_ = -1;
@@ -472,7 +416,8 @@ auto UdpCore::failSync(std::error_code ec) noexcept -> std::unexpected<std::erro
     return std::unexpected(ec);
 }
 
-void UdpCore::fail(std::error_code ec) noexcept {
+template <typename Backend>
+void UDPCore<Backend>::fail(std::error_code ec) noexcept {
     if (state_ == ConnectionState::Closing || state_ == ConnectionState::Closed) {
         return;
     }
@@ -480,7 +425,8 @@ void UdpCore::fail(std::error_code ec) noexcept {
     this->beginClose();
 }
 
-void UdpCore::beginClose() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::beginClose() noexcept {
     state_ = ConnectionState::Closing;
     prepared_ = 0;
     txDirty_ = false;
@@ -489,15 +435,15 @@ void UdpCore::beginClose() noexcept {
         return;
     }
     // shutdown() does not wake up operations on a UDP socket: cancel them.
-    if (auto* sqe = ring_.getSqe(); sqe) {
-        ::io_uring_prep_cancel_fd(sqe, fd_, IORING_ASYNC_CANCEL_ALL);
-        ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Cancel));
+    if (ring_.cancel(this, fd_)) {
         ++inflight_;
     }
 }
 
-void UdpCore::finishClose() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::finishClose() noexcept {
     if (fd_ >= 0) {
+        ring_.forget(fd_);
         ::close(fd_); // leaves the multicast group
         fd_ = -1;
     }
@@ -506,7 +452,8 @@ void UdpCore::finishClose() noexcept {
     state_ = ConnectionState::Closed;
 }
 
-void UdpCore::armRecv() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::armRecv() noexcept {
     if (rxTail_ - rxHead_ == bufferCount_) {
         // Every buffer is queued for the user: nothing to receive into. consume() resumes.
         rxStalled_ = true;
@@ -514,32 +461,30 @@ void UdpCore::armRecv() noexcept {
     }
     rxStalled_ = false;
 
-    auto* sqe = ring_.getSqe();
-    if (!sqe) [[unlikely]] {
+    if (!ring_.recvMultishot(this, fd_, &recvTemplate_, *pool_)) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
     }
-    ::io_uring_prep_recvmsg_multishot(sqe, fd_, &recvTemplate_, 0);
-    sqe->flags |= IOSQE_BUFFER_SELECT;
-    sqe->buf_group = bufferGroupId_;
-    ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Recv));
     recvInFlight_ = true;
     ++inflight_;
 }
 
-void UdpCore::resumeRecv() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::resumeRecv() noexcept {
     if (state_ == ConnectionState::Ready && !recvInFlight_) {
         this->armRecv();
     }
 }
 
-void UdpCore::markTxDirty() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::markTxDirty() noexcept {
     if (state_ == ConnectionState::Ready) {
         ring_.schedule(this);
     }
 }
 
-void UdpCore::flushTx() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::flushTx() noexcept {
     if (state_ != ConnectionState::Ready || sendInFlight_) {
         return;
     }
@@ -555,7 +500,8 @@ void UdpCore::flushTx() noexcept {
     }
 }
 
-void UdpCore::sendDirect() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::sendDirect() noexcept {
     while (txHead_ != txTail_) {
         auto const length = txLengths_[txHead_ & txMask_];
         auto const data = txBuffer_.readable();
@@ -566,7 +512,7 @@ void UdpCore::sendDirect() noexcept {
         } else if (errno == EINTR) {
             continue;
         } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // Socket send buffer is full: io_uring waits for room.
+            // Socket send buffer is full: the backend waits for room.
             this->startSend();
             ring_.submitNoThrow();
             return;
@@ -576,13 +522,9 @@ void UdpCore::sendDirect() noexcept {
     }
 }
 
-void UdpCore::startSend() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::startSend() noexcept {
     if (state_ != ConnectionState::Ready || sendInFlight_ || txHead_ == txTail_) {
-        return;
-    }
-    auto* sqe = ring_.getSqe();
-    if (!sqe) [[unlikely]] {
-        this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
     }
     // One datagram per request, one request in flight: keeps datagram order.
@@ -593,18 +535,22 @@ void UdpCore::startSend() noexcept {
     sendMsg_.msg_namelen = remoteLength_;
     sendMsg_.msg_iov = &sendIov_;
     sendMsg_.msg_iovlen = 1;
-    ::io_uring_prep_sendmsg(sqe, fd_, &sendMsg_, MSG_NOSIGNAL);
-    ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Send));
+    if (!ring_.sendMsg(this, fd_, &sendMsg_)) [[unlikely]] {
+        this->fail(makeErrorCode(Error::SubmissionQueueFull));
+        return;
+    }
     sendInFlight_ = true;
     ++inflight_;
 }
 
-void UdpCore::popDatagram() noexcept {
+template <typename Backend>
+void UDPCore<Backend>::popDatagram() noexcept {
     txBuffer_.consume(txLengths_[txHead_ & txMask_]);
     ++txHead_;
 }
 
-void UdpCore::dropDatagram(int error) noexcept {
+template <typename Backend>
+void UDPCore<Backend>::dropDatagram(int error) noexcept {
     this->popDatagram();
     ++txErrors_;
     txLastError_ = makePosixErrorCode(error);
@@ -612,9 +558,18 @@ void UdpCore::dropDatagram(int error) noexcept {
 
 } // namespace detail
 
-UdpConnection::UdpConnection(Reactor& reactor, UdpOptions options)
-    : core_{detail::UdpCore::create(reactor.ring(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
-    reactor.ring().attach(core_);
+template <typename Backend>
+UDPConnection<Backend>::UDPConnection(Reactor<Backend>& reactor, UDPOptions options)
+    : core_{detail::UDPCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
+    reactor.backend().attach(core_);
 }
+
+// The backends this library is built with.
+namespace detail {
+template class UDPCore<IoUringBackend>;
+template class UDPCore<EpollBackend>;
+} // namespace detail
+template class UDPConnection<IoUringBackend>;
+template class UDPConnection<EpollBackend>;
 
 } // namespace turboq::reactor

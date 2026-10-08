@@ -4,7 +4,7 @@
 [![CMake](https://img.shields.io/badge/build-CMake-informational.svg)](https://cmake.org)
 [![CI](https://github.com/ksergey/turboq-reactor/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/ksergey/turboq-reactor/actions/workflows/build-and-test.yml)
 
-> turboq-reactor is a single-threaded io_uring reactor that exposes every network connection as a
+> turboq-reactor is a single-threaded io_uring (or epoll) reactor that exposes every network connection as a
 > pair of zero-copy queues: one to read from, one to write to. Built for low-latency exchange
 > connectivity (TCP, multicast, kernel TLS, WebSocket), part of the [turboq](https://github.com/ksergey/turboq) family.
 
@@ -36,7 +36,7 @@ using namespace turboq::reactor;
 
 int main() {
     Reactor reactor;
-    WsConnection ws{reactor, {.url = "wss://stream.binance.com:9443/ws/btcusdt@trade"}};
+    WebsocketConnection ws{reactor, {.url = "wss://stream.binance.com:9443/ws/btcusdt@trade"}};
     if (auto result = ws.connect(); !result) {
         std::println(stderr, "connect: {}", result.error().message());
         return 1;
@@ -54,7 +54,12 @@ int main() {
 }
 ```
 
-`TcpConnection` and `UdpConnection` (unicast and multicast) work the same way: `rx.fetch()` /
-`rx.consume()` to read, `tx.prepare()` / `tx.commit()` / `tx.flush()` to write.
+`TCPConnection`, `TLSConnection` and `UDPConnection` (unicast and multicast) work the same way:
+`rx.fetch()` / `rx.consume()` to read, `tx.prepare()` / `tx.commit()` / `tx.flush()` to write.
 [`examples/binance_market_data.cpp`](examples/binance_market_data.cpp) adds reconnection with
 backoff, a liveness watchdog and graceful shutdown.
+
+The backend is a template parameter defaulting to io_uring. For epoll declare
+`Reactor<EpollBackend> reactor;` — connections deduce the backend from the reactor they are given
+(`TCPConnection conn{reactor, {...}}`); as class members write `TCPConnection<>` (io_uring) or
+`TCPConnection<EpollBackend>`.

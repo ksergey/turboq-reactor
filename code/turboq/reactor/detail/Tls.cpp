@@ -20,7 +20,7 @@
 #include <string>
 
 #include "../Error.h"
-#include "../TcpConnection.h"
+#include "../TLSConnection.h"
 
 namespace turboq::reactor {
 namespace {
@@ -214,7 +214,7 @@ auto popTlsError(std::error_code fallback) noexcept -> std::error_code {
     return {value, getTlsErrorCategory()};
 }
 
-auto createClientContext(TlsOptions const& options) noexcept -> std::expected<ssl_ctx_st*, std::error_code> {
+auto createClientContext(TLSOptions const& options) noexcept -> std::expected<ssl_ctx_st*, std::error_code> {
     SSL_CTX* ctx = ::SSL_CTX_new(::TLS_client_method());
     if (!ctx) {
         return std::unexpected(popTlsError(makeErrorCode(Error::TlsHandshakeFailed)));
@@ -224,8 +224,8 @@ auto createClientContext(TlsOptions const& options) noexcept -> std::expected<ss
         return std::unexpected(popTlsError(makeErrorCode(Error::InvalidOptions)));
     };
 
-    int const minVersion = options.minVersion == TlsVersion::Tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
-    int const maxVersion = options.maxVersion == TlsVersion::Tls12 ? TLS1_2_VERSION : TLS1_3_VERSION;
+    int const minVersion = options.minVersion == TLSVersion::Tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
+    int const maxVersion = options.maxVersion == TLSVersion::Tls12 ? TLS1_2_VERSION : TLS1_3_VERSION;
     if (minVersion > maxVersion || ::SSL_CTX_set_min_proto_version(ctx, minVersion) != 1 ||
         ::SSL_CTX_set_max_proto_version(ctx, maxVersion) != 1) {
         return fail();
@@ -241,12 +241,12 @@ auto createClientContext(TlsOptions const& options) noexcept -> std::expected<ss
 
     if (options.verifyPeer) {
         ::SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
-        if (options.caFile.empty() && options.caPath.empty()) {
+        if (!options.caFile && !options.caPath) {
             if (::SSL_CTX_set_default_verify_paths(ctx) != 1) {
                 return fail();
             }
-        } else if (::SSL_CTX_load_verify_locations(ctx, options.caFile.empty() ? nullptr : options.caFile.c_str(),
-                       options.caPath.empty() ? nullptr : options.caPath.c_str()) != 1) {
+        } else if (::SSL_CTX_load_verify_locations(ctx, options.caFile ? options.caFile->c_str() : nullptr,
+                       options.caPath ? options.caPath->c_str() : nullptr) != 1) {
             return fail();
         }
     } else {

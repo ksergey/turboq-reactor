@@ -20,7 +20,7 @@ struct ssl_ctx_st;
 
 namespace turboq::reactor {
 
-struct TlsOptions;
+struct TLSOptions;
 
 namespace detail {
 
@@ -40,7 +40,7 @@ struct KernelTlsSupport {
 /// Client SSL_CTX configured for kernel TLS: SSL_OP_ENABLE_KTLS, only ciphers the kernel
 /// implements (AES-GCM-128/256, ChaCha20-Poly1305), TLS 1.2+, peer verification per options.
 [[nodiscard]] auto createClientContext(
-    TlsOptions const& options) noexcept -> std::expected<ssl_ctx_st*, std::error_code>;
+    TLSOptions const& options) noexcept -> std::expected<ssl_ctx_st*, std::error_code>;
 
 void freeContext(ssl_ctx_st* ctx) noexcept;
 void freeSsl(ssl_st* ssl) noexcept;

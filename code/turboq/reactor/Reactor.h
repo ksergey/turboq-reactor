@@ -5,23 +5,24 @@
 
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 
+#include "EpollBackend.h"
 #include "Error.h"
-#include "TcpConnection.h"
-#include "UdpConnection.h"
-#include "WsConnection.h"
-#include "detail/IoHandler.h"
-#include "detail/Ring.h"
+#include "IoUringBackend.h"
+#include "TCPConnection.h"
+#include "TLSConnection.h"
+#include "UDPConnection.h"
+#include "WebsocketConnection.h"
 
 namespace turboq::reactor {
 
-/// Single-threaded io_uring event loop owning a set of connections.
+/// Single-threaded event loop owning a set of connections, on top of a Backend chosen at compile
+/// time: IoUringBackend (the default) or EpollBackend.
 ///
 /// Typical loop:
 ///
 ///   Reactor reactor;
-///   TcpConnection conn{reactor, {.host = "127.0.0.1", .port = 9000}};
+///   TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), 9000}}};
 ///   conn.connect();
 ///   while (running) {
 ///       reactor.poll();
@@ -30,52 +31,57 @@ namespace turboq::reactor {
 ///       }
 ///   }
 ///
+/// The same with epoll: Reactor<EpollBackend> reactor; the connection lines stay as they are,
+/// connections take the backend from the reactor they are constructed with (CTAD). Where there is
+/// nothing to deduce from (class members, containers) spell it out: TCPConnection<> is io_uring,
+/// TCPConnection<EpollBackend> is epoll.
+///
 /// The reactor never calls user code: poll() only moves data between sockets and the connections'
 /// rx/tx queues and advances connection state machines.
-///
-/// With TaskRunMode::Deferred the ring is created disabled and bound to the thread that calls
-/// poll()/wait() first, so a reactor may be constructed on one thread and run on another.
+template <typename Backend>
 class Reactor {
 private:
-    detail::Ring ring_;
+    Backend backend_;
 
 public:
+    using Options = typename Backend::Options;
+
     Reactor(Reactor const&) = delete;
     Reactor& operator=(Reactor const&) = delete;
 
-    /// Create io_uring instance. Throws std::system_error on error.
-    explicit Reactor(ReactorOptions const& options = {}) : ring_{options} {}
+    /// Throws std::system_error on error.
+    explicit Reactor(Options const& options = {}) : backend_{options} {}
 
-    /// Non-blocking iteration: send committed tx data, submit queued operations, process all
+    /// Non-blocking iteration: send committed tx data, start queued operations, process all
     /// available completions. Returns the number of processed completions.
     auto poll() -> std::size_t {
-        return ring_.poll();
+        return backend_.poll();
     }
 
     /// Like poll() but blocks until at least one completion arrives or the timeout expires.
     auto wait(std::chrono::nanoseconds timeout) -> std::size_t {
-        return ring_.wait(timeout);
+        return backend_.wait(timeout);
     }
 
-    /// Submit queued operations to the kernel now.
+    /// Hand queued operations to the kernel now (io_uring; nothing to do for epoll).
     void submit() {
-        ring_.submit();
+        backend_.submit();
     }
 
-    /// CLOCK_REALTIME (ns) captured in the last poll()/wait(), right before completions are processed.
-    [[nodiscard]] auto now() const noexcept -> std::uint64_t {
-        return ring_.now();
+    /// Wall clock time of the last poll()/wait(), taken right before completions are processed.
+    [[nodiscard]] auto now() const noexcept -> Timestamp {
+        return backend_.now();
     }
 
     /// Connections whose handle is gone but whose memory the kernel may still use; freed by
     /// poll()/wait() as their last operations complete.
     [[nodiscard]] auto retiredCount() const noexcept -> std::size_t {
-        return ring_.retiredCount();
+        return backend_.retiredCount();
     }
 
     /// Internal: what connections are built on.
-    [[nodiscard]] auto ring() noexcept -> detail::Ring& {
-        return ring_;
+    [[nodiscard]] auto backend() noexcept -> Backend& {
+        return backend_;
     }
 };
 

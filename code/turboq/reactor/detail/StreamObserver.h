@@ -5,7 +5,7 @@
 
 namespace turboq::reactor::detail {
 
-/// Internal hook for protocol layers built on top of a TcpConnection (WebSocket). Called by the
+/// Internal hook for protocol layers built on top of a TCPConnection (WebSocket). Called by the
 /// connection from within Reactor::poll(); never exposed to user code.
 class StreamObserver {
 public:

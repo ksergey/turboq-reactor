@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <print>
 #include <stdexcept>
 #include <string>
@@ -61,8 +62,17 @@ void pinToCpu(int cpu) {
     throw std::invalid_argument{"unknown taskrun mode: " + value};
 }
 
+/// The value of an option given on the command line, none otherwise.
+template <typename T>
+[[nodiscard]] auto optionalArg(cxxopts::ParseResult const& args, char const* name) -> std::optional<T> {
+    if (args.count(name) == 0) {
+        return std::nullopt;
+    }
+    return args[name].as<T>();
+}
+
 /// "p50 / p99 / max" of the samples, sorts in place.
-[[nodiscard]] auto summarize(std::vector<std::int64_t>& samples) -> std::string {
+[[nodiscard]] auto summarize(std::vector<std::chrono::nanoseconds>& samples) -> std::string {
     if (samples.empty()) {
         return "-";
     }
@@ -71,6 +81,66 @@ void pinToCpu(int cpu) {
         return samples[std::min(samples.size() - 1, static_cast<std::size_t>(q * static_cast<double>(samples.size())))];
     };
     return std::format("{} / {} / {}", at(0.50), at(0.99), samples.back());
+}
+
+template <typename Backend>
+void listen(
+    typename Backend::Options const& reactorOptions, UDPOptions const& udpOptions, std::chrono::seconds duration) {
+    Reactor<Backend> reactor{reactorOptions};
+    UDPConnection feed{reactor, udpOptions};
+    if (auto result = feed.open(); !result) {
+        throw std::runtime_error{"open failed: " + result.error().message()};
+    }
+    std::println("listening on {}", feed.localEndpoint());
+
+    auto const startTime = std::chrono::steady_clock::now();
+    auto nextReport = startTime + std::chrono::seconds{1};
+
+    std::uint64_t datagrams = 0;
+    std::uint64_t bytes = 0;
+    std::uint64_t truncated = 0;
+    std::uint32_t lastDrops = 0;
+    std::vector<std::chrono::nanoseconds> kernelToUser;
+    std::vector<std::chrono::nanoseconds> nicToKernel;
+    kernelToUser.reserve(1 << 20);
+    nicToKernel.reserve(1 << 20);
+
+    while (true) {
+        reactor.poll();
+        while (!feed.rx.empty()) {
+            auto const& info = feed.rx.info();
+            ++datagrams;
+            bytes += feed.rx.fetch().size();
+            truncated += info.truncated ? 1 : 0;
+            if (info.softwareTimestamp != Timestamp{}) {
+                kernelToUser.push_back(info.receiveTime - info.softwareTimestamp);
+                // Meaningful only if the NIC clock is synchronized to CLOCK_REALTIME (phc2sys).
+                if (info.hardwareTimestamp != Timestamp{}) {
+                    nicToKernel.push_back(info.softwareTimestamp - info.hardwareTimestamp);
+                }
+            }
+            feed.rx.consume();
+        }
+
+        auto const now = std::chrono::steady_clock::now();
+        if (now >= nextReport) {
+            auto const drops = feed.rx.drops();
+            std::println("datagrams {} | bytes {} | drops +{} | truncated {} | kernel->user p50/p99/max {} | "
+                         "nic->kernel {}",
+                datagrams, bytes, drops - lastDrops, truncated, summarize(kernelToUser), summarize(nicToKernel));
+            datagrams = bytes = truncated = 0;
+            lastDrops = drops;
+            kernelToUser.clear();
+            nicToKernel.clear();
+            nextReport += std::chrono::seconds{1};
+            if (duration != duration.zero() && now - startTime >= duration) {
+                break;
+            }
+        }
+        if (feed.state() != ConnectionState::Ready) {
+            throw std::runtime_error{"connection lost: " + feed.error().message()};
+        }
+    }
 }
 
 } // namespace
@@ -82,13 +152,14 @@ auto main(int argc, char** argv) -> int {
         options.add_options()
             ("g,group", "multicast group (empty for unicast)", cxxopts::value<std::string>()->default_value(""))
             ("source", "source address for source-specific multicast", cxxopts::value<std::string>()->default_value(""))
-            ("i,interface", "interface to join on", cxxopts::value<std::string>()->default_value(""))
+            ("i,interface", "interface to join on", cxxopts::value<std::string>())
             ("l,local", "local address for unicast", cxxopts::value<std::string>()->default_value(""))
             ("p,port", "port", cxxopts::value<std::uint16_t>())
             ("buffers", "receive buffer count", cxxopts::value<unsigned>()->default_value("4096"))
-            ("rcvbuf", "SO_RCVBUF size, 0 = system default", cxxopts::value<int>()->default_value("0"))
+            ("rcvbuf", "SO_RCVBUF size (default: the system's)", cxxopts::value<int>())
             ("timestamping", "none, software or hardware", cxxopts::value<std::string>()->default_value("software"))
-            ("taskrun", "interrupt, cooperative or deferred", cxxopts::value<std::string>()->default_value("deferred"))
+            ("backend", "io_uring or epoll", cxxopts::value<std::string>()->default_value("io_uring"))
+            ("taskrun", "[io_uring] interrupt, cooperative or deferred", cxxopts::value<std::string>()->default_value("deferred"))
             ("d,duration", "seconds to run, 0 = forever", cxxopts::value<unsigned>()->default_value("0"))
             ("cpu", "pin to this CPU (-1 = no pinning)", cxxopts::value<int>()->default_value("-1"))
             ("h,help", "print usage");
@@ -102,71 +173,41 @@ auto main(int argc, char** argv) -> int {
 
         pinToCpu(args["cpu"].as<int>());
 
-        Reactor reactor{{.taskRunMode = parseTaskRunMode(args["taskrun"].as<std::string>())}};
-        UdpConnection feed{reactor, {
-                                        .group = args["group"].as<std::string>(),
-                                        .source = args["source"].as<std::string>(),
-                                        .interface = args["interface"].as<std::string>(),
-                                        .localAddress = args["local"].as<std::string>(),
-                                        .localPort = args["port"].as<std::uint16_t>(),
-                                        .bufferCount = args["buffers"].as<unsigned>(),
-                                        .timestamping = parseTimestamping(args["timestamping"].as<std::string>()),
-                                        .socketRecvBufferSize = args["rcvbuf"].as<int>(),
-                                    }};
-        if (auto result = feed.open(); !result) {
-            throw std::runtime_error{"open failed: " + result.error().message()};
-        }
-        std::println("listening, port {}", feed.localPort());
+        auto const port = args["port"].as<std::uint16_t>();
+        auto parseOptional = [&](char const* name) -> std::optional<IPAddress> {
+            auto const text = args[name].as<std::string>();
+            if (text.empty()) {
+                return std::nullopt;
+            }
+            auto address = IPAddress::parse(text);
+            if (!address) {
+                throw std::invalid_argument{std::string{"--"} + name + ": not an IP address: " + text};
+            }
+            return *address;
+        };
+        auto const group = parseOptional("group");
+        auto const local = parseOptional("local");
 
+        auto const udpOptions = UDPOptions{
+            .group = group.transform([port](IPAddress const& address) {
+                return Endpoint{address, port};
+            }),
+            .source = parseOptional("source"),
+            .interface = optionalArg<std::string>(args, "interface"),
+            .local = Endpoint{local.value_or(IPAddress{}), port},
+            .bufferCount = args["buffers"].as<unsigned>(),
+            .timestamping = parseTimestamping(args["timestamping"].as<std::string>()),
+            .socketRecvBufferSize = optionalArg<int>(args, "rcvbuf"),
+        };
         auto const duration = std::chrono::seconds{args["duration"].as<unsigned>()};
-        auto const startTime = std::chrono::steady_clock::now();
-        auto nextReport = startTime + std::chrono::seconds{1};
-
-        std::uint64_t datagrams = 0;
-        std::uint64_t bytes = 0;
-        std::uint64_t truncated = 0;
-        std::uint32_t lastDrops = 0;
-        std::vector<std::int64_t> kernelToUser;
-        std::vector<std::int64_t> nicToKernel;
-        kernelToUser.reserve(1 << 20);
-        nicToKernel.reserve(1 << 20);
-
-        while (true) {
-            reactor.poll();
-            while (!feed.rx.empty()) {
-                auto const& info = feed.rx.info();
-                ++datagrams;
-                bytes += feed.rx.fetch().size();
-                truncated += info.truncated ? 1 : 0;
-                if (info.softwareTimestampNs != 0) {
-                    kernelToUser.push_back(static_cast<std::int64_t>(info.receiveTimeNs - info.softwareTimestampNs));
-                    // Meaningful only if the NIC clock is synchronized to CLOCK_REALTIME (phc2sys).
-                    if (info.hardwareTimestampNs != 0) {
-                        nicToKernel.push_back(
-                            static_cast<std::int64_t>(info.softwareTimestampNs - info.hardwareTimestampNs));
-                    }
-                }
-                feed.rx.consume();
-            }
-
-            auto const now = std::chrono::steady_clock::now();
-            if (now >= nextReport) {
-                auto const drops = feed.rx.drops();
-                std::println("datagrams {} | bytes {} | drops +{} | truncated {} | kernel->user ns p50/p99/max {} | "
-                             "nic->kernel ns {}",
-                    datagrams, bytes, drops - lastDrops, truncated, summarize(kernelToUser), summarize(nicToKernel));
-                datagrams = bytes = truncated = 0;
-                lastDrops = drops;
-                kernelToUser.clear();
-                nicToKernel.clear();
-                nextReport += std::chrono::seconds{1};
-                if (duration.count() != 0 && now - startTime >= duration) {
-                    break;
-                }
-            }
-            if (feed.state() != ConnectionState::Ready) {
-                throw std::runtime_error{"connection lost: " + feed.error().message()};
-            }
+        auto const backend = args["backend"].as<std::string>();
+        if (backend == "io_uring") {
+            listen<IoUringBackend>(
+                {.taskRunMode = parseTaskRunMode(args["taskrun"].as<std::string>())}, udpOptions, duration);
+        } else if (backend == "epoll") {
+            listen<EpollBackend>({}, udpOptions, duration);
+        } else {
+            throw std::invalid_argument{"unknown backend: " + backend};
         }
     } catch (std::exception const& e) {
         std::println(stderr, "error: {}", e.what());

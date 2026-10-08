@@ -22,7 +22,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <ctime>
+#include <optional>
 #include <print>
 #include <random>
 #include <stdexcept>
@@ -46,20 +46,13 @@ void onSignal(int) {
     gStop = 1;
 }
 
-/// "2026-10-07 12:34:56.123456" from CLOCK_REALTIME nanoseconds.
-[[nodiscard]] auto formatTime(std::uint64_t ns) -> std::string {
-    std::time_t const seconds = static_cast<std::time_t>(ns / 1'000'000'000u);
-    std::tm tm;
-    ::gmtime_r(&seconds, &tm);
-    char buffer[40];
-    auto const length = std::strftime(buffer, sizeof(buffer), "%F %T", &tm);
-    return std::format("{}.{:06}", std::string_view{buffer, length}, (ns / 1000) % 1'000'000);
+/// "2026-10-07 12:34:56.123456" (UTC).
+[[nodiscard]] auto formatTime(Timestamp time) -> std::string {
+    return std::format("{:%F %T}", std::chrono::floor<std::chrono::microseconds>(time));
 }
 
-[[nodiscard]] auto realtimeNs() -> std::uint64_t {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count());
+[[nodiscard]] auto wallNow() -> Timestamp {
+    return std::chrono::time_point_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now());
 }
 
 /// Exponential backoff with +-20% jitter, so that many clients dropped at once (exchange restart)
@@ -79,8 +72,8 @@ public:
         auto const base = current_;
         current_ = std::min(current_ * 2, max_);
         std::uniform_real_distribution<double> jitter{0.8, 1.2};
-        return std::chrono::milliseconds{
-            static_cast<std::int64_t>(static_cast<double>(base.count()) * jitter(random_))};
+        return std::chrono::round<std::chrono::milliseconds>(
+            std::chrono::duration<double, std::milli>{base} * jitter(random_));
     }
 
     void reset() {
@@ -91,7 +84,7 @@ public:
 struct Config {
     std::vector<std::string> streams;
     std::string baseUrl;
-    std::string caFile;
+    std::optional<std::string> caFile;
     bool liveSubscribe = false;
     /// Nothing received (data or server ping) for this long: reconnect. Binance pings every 20 s.
     std::chrono::milliseconds staleTimeout{30s};
@@ -116,14 +109,14 @@ struct Config {
 /// never blocks.
 class MarketDataFeed {
 private:
-    Reactor& reactor_;
+    Reactor<>& reactor_;
     Config config_;
-    WsConnection ws_;
+    WebsocketConnection<> ws_;
     Backoff backoff_;
 
     ConnectionState lastState_{ConnectionState::Idle};
     Clock::time_point readyAt_{};
-    std::uint64_t readyAtNs_{0}; // Reactor::now() clock
+    Timestamp readyAtTime_{}; // Reactor::now() clock
     Clock::time_point reconnectAt_{};
     bool reconnectPending_{false};
     bool stopping_{false};
@@ -131,7 +124,7 @@ private:
     std::uint64_t sessions_{0};
 
 public:
-    MarketDataFeed(Reactor& reactor, Config config)
+    MarketDataFeed(Reactor<>& reactor, Config config)
         : reactor_{reactor}, config_{std::move(config)}, ws_{reactor, makeOptions(config_)},
           backoff_{config_.backoffInitial, config_.backoffMax} {}
 
@@ -164,11 +157,11 @@ public:
         if (state == ConnectionState::Ready) {
             // TCP can stay "connected" forever after a network failure: no data, no error. Binance
             // pings every 20 s, so anything received (pings included) proves the link is alive.
-            auto const lastReceive = std::max(ws_.lastReceiveTime(), readyAtNs_);
-            auto const silence = std::chrono::nanoseconds{reactor_.now() - lastReceive};
-            if (reactor_.now() > lastReceive && silence > config_.staleTimeout) {
-                std::println(stderr, "{} nothing received for {} ms, reconnecting", formatTime(realtimeNs()),
-                    std::chrono::duration_cast<std::chrono::milliseconds>(silence).count());
+            auto const lastReceive = std::max(ws_.lastReceiveTime(), readyAtTime_);
+            auto const silence = reactor_.now() - lastReceive;
+            if (silence > config_.staleTimeout) {
+                std::println(stderr, "{} nothing received for {}, reconnecting", formatTime(wallNow()),
+                    std::chrono::floor<std::chrono::milliseconds>(silence));
                 ws_.close(); // -> Closed -> reconnect scheduled in onStateChange()
             }
         }
@@ -199,7 +192,7 @@ private:
     void connect(Clock::time_point now) {
         if (auto result = ws_.connect(); !result) {
             // Synchronous failure (DNS, socket()): same policy as an asynchronous one.
-            std::println(stderr, "{} connect failed: {}", formatTime(realtimeNs()), result.error().message());
+            std::println(stderr, "{} connect failed: {}", formatTime(wallNow()), result.error().message());
             this->scheduleReconnect(now);
         }
         lastState_ = ws_.state();
@@ -225,21 +218,21 @@ private:
         if (ws_.httpStatus() == 429 || ws_.httpStatus() == 418) {
             delay = std::max<std::chrono::milliseconds>(delay, 60s);
         }
-        std::println(stderr, "{} reconnecting in {} ms", formatTime(realtimeNs()), delay.count());
+        std::println(stderr, "{} reconnecting in {}", formatTime(wallNow()), delay);
         reconnectAt_ = now + delay;
         reconnectPending_ = true;
     }
 
     void onStateChange(ConnectionState from, ConnectionState to, Clock::time_point now) {
-        std::println(stderr, "{} state {} -> {}", formatTime(realtimeNs()), toStringView(from), toStringView(to));
+        std::println(stderr, "{} state {} -> {}", formatTime(wallNow()), toStringView(from), toStringView(to));
         if (to == ConnectionState::Ready) {
             ++sessions_;
             readyAt_ = now;
-            readyAtNs_ = reactor_.now();
-            std::println(stderr, "{} connected{}, session #{}", formatTime(realtimeNs()), describeTls(), sessions_);
+            readyAtTime_ = reactor_.now();
+            std::println(stderr, "{} connected{}, session #{}", formatTime(wallNow()), describeTls(), sessions_);
             if (!ws_.tlsVersion().empty() && ws_.kernelTlsOffload() != KernelTlsOffload::Full && !kernelTlsHintShown_) {
                 // Works, but crypto runs on this thread with an extra copy: say why, once.
-                std::println(stderr, "{} kernel TLS: {}", formatTime(realtimeNs()), describeKernelTlsSupport());
+                std::println(stderr, "{} kernel TLS: {}", formatTime(wallNow()), describeKernelTlsSupport());
                 kernelTlsHintShown_ = true;
             }
             if (config_.liveSubscribe) {
@@ -247,16 +240,15 @@ private:
             }
         } else if (to == ConnectionState::Closed) {
             if (auto const ec = ws_.error()) {
-                std::println(stderr, "{} disconnected: {}{}{}", formatTime(realtimeNs()), ec.message(),
+                std::println(stderr, "{} disconnected: {}{}{}", formatTime(wallNow()), ec.message(),
                     ws_.closeReason().empty() ? "" : ", reason: ", ws_.closeReason());
                 if (isKernelTlsError(ec) && !kernelTlsHintShown_) {
                     // Configuration problem, not a network one: say what is missing, once.
-                    std::println(stderr, "{} kernel TLS: {}", formatTime(realtimeNs()), describeKernelTlsSupport());
+                    std::println(stderr, "{} kernel TLS: {}", formatTime(wallNow()), describeKernelTlsSupport());
                     kernelTlsHintShown_ = true;
                 }
                 if (ws_.httpStatus() != 0 && ws_.httpStatus() != 101) {
-                    std::println(
-                        stderr, "{} upgrade rejected with HTTP {}", formatTime(realtimeNs()), ws_.httpStatus());
+                    std::println(stderr, "{} upgrade rejected with HTTP {}", formatTime(wallNow()), ws_.httpStatus());
                 }
             }
             if (stopping_) {
@@ -280,12 +272,12 @@ private:
         }
         request += std::format(R"(],"id":{}}})", sessions_);
         if (!ws_.tx.push(request)) {
-            std::println(stderr, "{} subscribe request does not fit into the tx ring", formatTime(realtimeNs()));
+            std::println(stderr, "{} subscribe request does not fit into the tx ring", formatTime(wallNow()));
             ws_.close();
             return;
         }
         ws_.tx.flush();
-        std::println(stderr, "{} sent {}", formatTime(realtimeNs()), request);
+        std::println(stderr, "{} sent {}", formatTime(wallNow()), request);
     }
 
     auto drainMessages() -> bool {
@@ -343,7 +335,7 @@ auto main(int argc, char** argv) -> int {
             ("url", "base endpoint; wss://data-stream.binance.vision serves market data only",
                 cxxopts::value<std::string>()->default_value("wss://stream.binance.com:9443"))
             ("ca-file", "trusted CA certificates (default: system store); for testing against a local server",
-                cxxopts::value<std::string>()->default_value(""))
+                cxxopts::value<std::string>())
             ("live-subscribe", "connect to /ws and send SUBSCRIBE after every (re)connect")
             ("stale-timeout", "reconnect when nothing (not even a ping) arrives for this many ms",
                 cxxopts::value<unsigned>()->default_value("30000"))
@@ -362,7 +354,7 @@ auto main(int argc, char** argv) -> int {
         Config config{
             .streams = splitList(args["streams"].as<std::string>()),
             .baseUrl = args["url"].as<std::string>(),
-            .caFile = args["ca-file"].as<std::string>(),
+            .caFile = args.count("ca-file") ? std::optional{args["ca-file"].as<std::string>()} : std::nullopt,
             .liveSubscribe = args.count("live-subscribe") > 0,
             .staleTimeout = std::chrono::milliseconds{args["stale-timeout"].as<unsigned>()},
             .backoffInitial = std::chrono::milliseconds{args["backoff-initial"].as<unsigned>()},
@@ -397,7 +389,7 @@ auto main(int argc, char** argv) -> int {
                 std::fflush(stdout);
             }
             if (gStop && stopDeadline == Clock::time_point::max()) {
-                std::println(stderr, "{} stopping", formatTime(realtimeNs()));
+                std::println(stderr, "{} stopping", formatTime(wallNow()));
                 feed.stop();
                 stopDeadline = now + 2s;
             }

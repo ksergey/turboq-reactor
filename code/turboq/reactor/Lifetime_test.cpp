@@ -20,6 +20,7 @@
 
 #include "Error.h"
 #include "Reactor.h"
+#include "TestBackend.h"
 
 namespace turboq::reactor::testing {
 namespace {
@@ -122,7 +123,7 @@ TEST_SUITE("Lifetime") {
         Reactor reactor;
         int peer = -1;
         {
-            TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port()}};
+            TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
             REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
@@ -141,7 +142,7 @@ TEST_SUITE("Lifetime") {
         Listener listener;
         Reactor reactor;
         {
-            TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port()}};
+            TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
             REQUIRE(conn.connect()); // connect + linked timeout queued, not submitted yet
         }
         REQUIRE_EQ(reactor.retiredCount(), 1);
@@ -153,8 +154,8 @@ TEST_SUITE("Lifetime") {
     TEST_CASE("never connected connection is deleted right away") {
         Reactor reactor;
         {
-            TcpConnection tcp{reactor, {.host = "127.0.0.1", .port = 1}};
-            UdpConnection udp{reactor, {.localAddress = "127.0.0.1"}};
+            TCPConnection tcp{reactor, {.endpoint = {IPv4Address::loopback(), 1}}};
+            UDPConnection udp{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
         }
         REQUIRE_EQ(reactor.retiredCount(), 0);
     }
@@ -163,7 +164,7 @@ TEST_SUITE("Lifetime") {
         Listener listener;
         Reactor reactor;
         {
-            TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port(), .directSend = false}};
+            TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}, .directSend = false}};
             REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
@@ -183,10 +184,11 @@ TEST_SUITE("Lifetime") {
         for (int round = 0; round < 3; ++round) {
             CAPTURE(round);
             {
-                UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .bufferCount = 64}};
+                UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 64}};
                 REQUIRE(conn.open());
-                UdpConnection sender{reactor,
-                    {.localAddress = "127.0.0.1", .remoteAddress = "127.0.0.1", .remotePort = conn.localPort()}};
+                UDPConnection sender{
+                    reactor, {.local = Endpoint{IPv4Address::loopback()},
+                                 .remote = Endpoint{IPv4Address::loopback(), conn.localEndpoint().port}}};
                 REQUIRE(sender.open());
                 REQUIRE(sender.tx.push(asBytes("hello")));
                 sender.tx.flush();
@@ -200,7 +202,7 @@ TEST_SUITE("Lifetime") {
         }
         // Buffer groups were unregistered and recycled: many sequential sockets do not run out.
         for (int i = 0; i < 100; ++i) {
-            UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .bufferCount = 1}};
+            UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 1}};
             REQUIRE(conn.open());
             conn.close();
             REQUIRE(pollUntil(reactor, [&] {
@@ -215,7 +217,7 @@ TEST_SUITE("Lifetime") {
         std::string received;
         std::thread server;
         {
-            WsConnection ws{reactor, {.url = listener.url()}};
+            WebsocketConnection ws{reactor, {.url = listener.url()}};
             REQUIRE(ws.connect());
             server = std::thread{[&] {
                 int const fd = acceptWebSocket(listener);
@@ -243,7 +245,7 @@ TEST_SUITE("Lifetime") {
         Listener listener; // never answers: the upgrade timer and the receive are in flight
         Reactor reactor;
         {
-            WsConnection ws{reactor, {.url = listener.url()}};
+            WebsocketConnection ws{reactor, {.url = listener.url()}};
             REQUIRE(ws.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return ws.state() == ConnectionState::Handshaking;
@@ -257,11 +259,11 @@ TEST_SUITE("Lifetime") {
     TEST_CASE("connections can be moved and kept in containers") {
         Listener listener;
         Reactor reactor;
-        std::vector<TcpConnection> connections;
+        std::vector<TCPConnection> connections;
         constexpr int kCount = 16;
         for (int i = 0; i < kCount; ++i) {
             // Reallocations move the handles while connects are in flight.
-            connections.emplace_back(reactor, TcpOptions{.host = "127.0.0.1", .port = listener.port()});
+            connections.emplace_back(reactor, TCPOptions{.endpoint = {IPv4Address::loopback(), listener.port()}});
             REQUIRE(connections.back().connect());
         }
         REQUIRE(pollUntil(reactor, [&] {
@@ -310,11 +312,12 @@ TEST_SUITE("Lifetime") {
 
     TEST_CASE("a user class owns its connections") {
         struct Connector {
-            UdpConnection lineA;
-            UdpConnection lineB;
+            UDPConnection lineA;
+            UDPConnection lineB;
 
             explicit Connector(Reactor& reactor)
-                : lineA{reactor, {.localAddress = "127.0.0.1"}}, lineB{reactor, {.localAddress = "127.0.0.1"}} {
+                : lineA{reactor, {.local = Endpoint{IPv4Address::loopback()}}},
+                  lineB{reactor, {.local = Endpoint{IPv4Address::loopback()}}} {
                 REQUIRE(lineA.open());
                 REQUIRE(lineB.open());
             }
@@ -325,16 +328,16 @@ TEST_SUITE("Lifetime") {
         auto moved = std::move(*connector);
         connector.reset();
         REQUIRE_EQ(moved.lineA.state(), ConnectionState::Ready);
-        REQUIRE_NE(moved.lineA.localPort(), moved.lineB.localPort());
+        REQUIRE_NE(moved.lineA.localEndpoint().port, moved.lineB.localEndpoint().port);
     }
 
     TEST_CASE("reactor destroyed before its connections") {
         Listener listener;
         Listener wsListener;
         auto reactor = std::make_unique<Reactor>();
-        TcpConnection tcp{*reactor, {.host = "127.0.0.1", .port = listener.port()}};
-        UdpConnection udp{*reactor, {.localAddress = "127.0.0.1"}};
-        WsConnection ws{*reactor, {.url = wsListener.url()}};
+        TCPConnection tcp{*reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
+        UDPConnection udp{*reactor, {.local = Endpoint{IPv4Address::loopback()}}};
+        WebsocketConnection ws{*reactor, {.url = wsListener.url()}};
         REQUIRE(tcp.connect());
         REQUIRE(udp.open());
         REQUIRE(ws.connect());

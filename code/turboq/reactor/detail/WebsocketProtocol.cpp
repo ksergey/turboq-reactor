@@ -1,7 +1,7 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
-#include "WsProtocol.h"
+#include "WebsocketProtocol.h"
 
 #include <sys/random.h>
 

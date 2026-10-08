@@ -20,7 +20,8 @@
 
 #include "Error.h"
 #include "Reactor.h"
-#include "detail/WsProtocol.h"
+#include "TestBackend.h"
+#include "detail/WebsocketProtocol.h"
 
 namespace turboq::reactor::testing {
 namespace {
@@ -240,7 +241,7 @@ public:
 
 } // namespace
 
-TEST_SUITE("WsConnection") {
+TEST_SUITE("WebsocketConnection") {
 
     TEST_CASE("URL parsing") {
         auto url = detail::parseWsUrl("wss://stream.example.com/ws/btcusdt@trade");
@@ -310,9 +311,9 @@ TEST_SUITE("WsConnection") {
         }};
 
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url("/ws?streams=btcusdt"),
-                                     .headers = {{"X-Api-Key", "secret"}},
-                                     .rxBufferSize = 256 * 1024}};
+        WebsocketConnection ws{reactor, {.url = server.url("/ws?streams=btcusdt"),
+                                            .headers = {{"X-Api-Key", "secret"}},
+                                            .rxBufferSize = 256 * 1024}};
         REQUIRE(ws.connect());
         REQUIRE(ws.tx.prepare(1).empty()); // not Ready yet
         REQUIRE(pollUntil(reactor, [&] {
@@ -324,7 +325,7 @@ TEST_SUITE("WsConnection") {
             return ws.rx.size() == 4;
         }));
         REQUIRE_EQ(ws.rx.opcode(), WsOpcode::Text);
-        REQUIRE_NE(ws.rx.timestamp(), 0);
+        REQUIRE(ws.rx.timestamp() != Timestamp{});
         REQUIRE_EQ(asString(ws.rx.fetch()), R"({"e":"trade","p":"100.5"})");
         ws.rx.consume();
         REQUIRE_EQ(ws.rx.opcode(), WsOpcode::Binary);
@@ -385,7 +386,7 @@ TEST_SUITE("WsConnection") {
                 return WsServer::accept101(key) + Peer::frame(true, 0x1, "early") + Peer::frame(true, 0x1, "bird");
             }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.rx.size() == 2;
@@ -410,7 +411,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.rx.size() == 2;
@@ -445,7 +446,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Ready;
@@ -484,7 +485,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
@@ -505,7 +506,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Ready;
@@ -530,7 +531,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Ready;
@@ -554,7 +555,7 @@ TEST_SUITE("WsConnection") {
                 return std::string{"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"};
             }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
@@ -572,7 +573,7 @@ TEST_SUITE("WsConnection") {
                                    "Sec-WebSocket-Accept: AAAAAAAAAAAAAAAAAAAAAAAAAAA=\r\n\r\n"};
             }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
@@ -587,7 +588,7 @@ TEST_SUITE("WsConnection") {
                 return std::string{};
             }}; // never answers
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url(), .handshakeTimeout = 200ms}};
+        WebsocketConnection ws{reactor, {.url = server.url(), .handshakeTimeout = 200ms}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Handshaking;
@@ -608,7 +609,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
@@ -625,7 +626,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url(), .rxBufferSize = 4096}};
+        WebsocketConnection ws{reactor, {.url = server.url(), .rxBufferSize = 4096}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
@@ -640,7 +641,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url(), .maxMessageSize = 100}};
+        WebsocketConnection ws{reactor, {.url = server.url(), .maxMessageSize = 100}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return ws.state() == ConnectionState::Closed;
@@ -668,7 +669,7 @@ TEST_SUITE("WsConnection") {
             peer.drain();
         }};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url(), .rxBufferSize = 4096, .maxQueuedMessages = 16}};
+        WebsocketConnection ws{reactor, {.url = server.url(), .rxBufferSize = 4096, .maxQueuedMessages = 16}};
         REQUIRE(ws.connect());
         int expected = 0;
         REQUIRE(pollUntil(
@@ -695,7 +696,7 @@ TEST_SUITE("WsConnection") {
                         },
             &WsServer::accept101, 2};
         Reactor reactor;
-        WsConnection ws{reactor, {.url = server.url()}};
+        WebsocketConnection ws{reactor, {.url = server.url()}};
         REQUIRE(ws.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return !ws.rx.empty();
@@ -722,7 +723,7 @@ TEST_SUITE("WsConnection") {
 
     TEST_CASE("invalid URL throws") {
         Reactor reactor;
-        REQUIRE_THROWS_AS(WsConnection(reactor, {.url = "http://example.com/"}), std::system_error);
+        REQUIRE_THROWS_AS(WebsocketConnection(reactor, {.url = "http://example.com/"}), std::system_error);
     }
 }
 

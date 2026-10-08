@@ -6,6 +6,7 @@
 //
 //   tcp_pingpong --role server   --port 9000 --cpu 2
 //   tcp_pingpong --role reactor  --port 9000 --cpu 3 --taskrun deferred
+//   tcp_pingpong --role reactor  --port 9000 --cpu 3 --backend epoll
 //   tcp_pingpong --role baseline --port 9000 --cpu 3
 
 #include <arpa/inet.h>
@@ -33,10 +34,7 @@ namespace {
 
 using namespace turboq::reactor;
 
-[[nodiscard]] auto clockNow() noexcept -> std::int64_t {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
+using Clock = std::chrono::steady_clock;
 
 void pinToCpu(int cpu) {
     if (cpu < 0) {
@@ -61,7 +59,7 @@ void pinToCpu(int cpu) {
     throw std::invalid_argument{"unknown taskrun mode: " + value};
 }
 
-void printReport(std::vector<std::int64_t>& samples) {
+void printReport(std::vector<std::chrono::nanoseconds>& samples) {
     if (samples.empty()) {
         std::println("no samples");
         return;
@@ -71,7 +69,7 @@ void printReport(std::vector<std::int64_t>& samples) {
         return samples[std::min(samples.size() - 1, static_cast<std::size_t>(q * static_cast<double>(samples.size())))];
     };
     std::println("round trips: {}", samples.size());
-    std::println("rtt ns: min {} | p50 {} | p90 {} | p99 {} | p99.9 {} | p99.99 {} | max {}", samples.front(), at(0.50),
+    std::println("rtt: min {} | p50 {} | p90 {} | p99 {} | p99.9 {} | p99.99 {} | max {}", samples.front(), at(0.50),
         at(0.90), at(0.99), at(0.999), at(0.9999), samples.back());
 }
 
@@ -118,10 +116,15 @@ void runServer(std::uint16_t port, std::size_t size) {
     }
 }
 
+template <typename Backend>
 void runReactorClient(std::string const& host, std::uint16_t port, std::size_t size, std::uint64_t count,
-    std::uint64_t warmup, TaskRunMode mode, bool directSend) {
-    Reactor reactor{{.taskRunMode = mode}};
-    TcpConnection conn{reactor, {.host = host, .port = port, .directSend = directSend}};
+    std::uint64_t warmup, typename Backend::Options const& reactorOptions, bool directSend) {
+    Reactor<Backend> reactor{reactorOptions};
+    auto endpoints = resolve(host, port);
+    if (!endpoints) {
+        throw std::runtime_error{"can't resolve " + host + ": " + endpoints.error().message()};
+    }
+    TCPConnection conn{reactor, {.endpoint = endpoints->front(), .directSend = directSend}};
     if (auto result = conn.connect(); !result) {
         throw std::runtime_error{"connect failed: " + result.error().message()};
     }
@@ -132,13 +135,13 @@ void runReactorClient(std::string const& host, std::uint16_t port, std::size_t s
         throw std::runtime_error{"connect failed: " + conn.error().message()};
     }
 
-    std::vector<std::int64_t> samples;
+    std::vector<std::chrono::nanoseconds> samples;
     samples.reserve(count);
     for (std::uint64_t seq = 0; seq < warmup + count; ++seq) {
         auto buffer = conn.tx.prepare(size);
         std::memset(buffer.data(), 0, size);
         std::memcpy(buffer.data(), &seq, std::min(size, sizeof(seq)));
-        auto const start = clockNow();
+        auto const start = Clock::now();
         conn.tx.commit();
         conn.tx.flush();
 
@@ -149,7 +152,7 @@ void runReactorClient(std::string const& host, std::uint16_t port, std::size_t s
             }
             turboq::cpuRelax();
         }
-        auto const end = clockNow();
+        auto const end = Clock::now();
         conn.rx.consume(size);
         if (seq >= warmup) {
             samples.push_back(end - start);
@@ -175,11 +178,11 @@ void runBaselineClient(
 
     std::vector<char> tx(size, 0);
     std::vector<char> rx(size);
-    std::vector<std::int64_t> samples;
+    std::vector<std::chrono::nanoseconds> samples;
     samples.reserve(count);
     for (std::uint64_t seq = 0; seq < warmup + count; ++seq) {
         std::memcpy(tx.data(), &seq, std::min(size, sizeof(seq)));
-        auto const start = clockNow();
+        auto const start = Clock::now();
         if (::send(fd, tx.data(), size, MSG_NOSIGNAL) != static_cast<ssize_t>(size)) {
             throw std::runtime_error{"short send"};
         }
@@ -192,7 +195,7 @@ void runBaselineClient(
                 throw std::runtime_error{"connection lost"};
             }
         }
-        auto const end = clockNow();
+        auto const end = Clock::now();
         if (seq >= warmup) {
             samples.push_back(end - start);
         }
@@ -214,7 +217,8 @@ auto main(int argc, char** argv) -> int {
             ("s,size", "message size in bytes", cxxopts::value<std::size_t>()->default_value("64"))
             ("c,count", "measured round trips", cxxopts::value<std::uint64_t>()->default_value("100000"))
             ("w,warmup", "round trips before measuring", cxxopts::value<std::uint64_t>()->default_value("10000"))
-            ("taskrun", "[reactor] interrupt, cooperative or deferred", cxxopts::value<std::string>()->default_value("deferred"))
+            ("backend", "[reactor] io_uring or epoll", cxxopts::value<std::string>()->default_value("io_uring"))
+            ("taskrun", "[reactor/io_uring] interrupt, cooperative or deferred", cxxopts::value<std::string>()->default_value("deferred"))
             ("direct-send", "[reactor] synchronous send() in flush()", cxxopts::value<bool>()->default_value("true"))
             ("cpu", "pin to this CPU (-1 = no pinning)", cxxopts::value<int>()->default_value("-1"))
             ("h,help", "print usage");
@@ -239,8 +243,16 @@ auto main(int argc, char** argv) -> int {
         if (role == "server") {
             runServer(port, size);
         } else if (role == "reactor") {
-            runReactorClient(host, port, size, count, warmup, parseTaskRunMode(args["taskrun"].as<std::string>()),
-                args["direct-send"].as<bool>());
+            auto const backend = args["backend"].as<std::string>();
+            auto const directSend = args["direct-send"].as<bool>();
+            if (backend == "io_uring") {
+                runReactorClient<IoUringBackend>(host, port, size, count, warmup,
+                    {.taskRunMode = parseTaskRunMode(args["taskrun"].as<std::string>())}, directSend);
+            } else if (backend == "epoll") {
+                runReactorClient<EpollBackend>(host, port, size, count, warmup, {}, directSend);
+            } else {
+                throw std::invalid_argument{"unknown backend: " + backend};
+            }
         } else if (role == "baseline") {
             runBaselineClient(host, port, size, count, warmup);
         } else {

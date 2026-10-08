@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <liburing.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
@@ -12,6 +11,7 @@
 #include <cstring>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <system_error>
@@ -21,13 +21,12 @@
 #include <turboq/MappedRegion.h>
 #include <turboq/Platform.h>
 
+#include "Address.h"
 #include "MirroredBuffer.h"
 #include "Types.h"
 #include "detail/IoHandler.h"
 
 namespace turboq::reactor {
-
-class Reactor;
 
 /// Kernel receive timestamps (SO_TIMESTAMPING).
 enum class Timestamping : std::uint8_t {
@@ -40,30 +39,27 @@ enum class Timestamping : std::uint8_t {
     Hardware,
 };
 
-struct UdpOptions {
-    /// Multicast group to join (numeric IPv4/IPv6 address). Empty for unicast.
-    std::string group{};
-    /// Source address for source-specific multicast (MCAST_JOIN_SOURCE_GROUP). Empty for any source.
-    std::string source{};
-    /// Interface name used to join the group and to send multicast. Empty lets the kernel choose
-    /// by routing table.
-    std::string interface{};
-    /// Bind to the group address instead of localAddress. Together with IP_MULTICAST_ALL = 0 (always
+struct UDPOptions {
+    /// Multicast feed to subscribe to: the group to join and the port it is published on.
+    std::optional<Endpoint> group{};
+    /// Source for source-specific multicast (MCAST_JOIN_SOURCE_GROUP). None for any source.
+    std::optional<IPAddress> source{};
+    /// Interface name used to join the group and to send multicast. None: the kernel chooses by
+    /// routing table.
+    std::optional<std::string> interface{};
+    /// Bind to the group address instead of `local`. Together with IP_MULTICAST_ALL = 0 (always
     /// set) this guarantees the socket only sees datagrams of its own group, even when other
     /// sockets in the system joined other groups on the same port (classic A/B feed setup).
     bool bindToGroup = true;
 
-    /// Local address to bind to. Empty means the wildcard address. Ignored when joining a
-    /// multicast group with bindToGroup set.
-    std::string localAddress{};
-    /// Local port (also the port the multicast feed is published on). 0 picks an ephemeral port
-    /// (fine for send-only sockets).
-    std::uint16_t localPort = 0;
+    /// Local address and port to bind to, taken as is (0.0.0.0 and port 0 included). None: the
+    /// wildcard address of the socket's family and an ephemeral port (fine for send-only sockets).
+    /// With a group the port is always the group's; the address is used when bindToGroup is off.
+    std::optional<Endpoint> local{};
 
-    /// Default destination for tx (unicast or multicast). Empty means the socket is receive-only and
+    /// Default destination for tx (unicast or multicast). None: the socket is receive-only and
     /// tx.prepare() always fails.
-    std::string remoteAddress{};
-    std::uint16_t remotePort = 0;
+    std::optional<Endpoint> remote{};
 
     /// Receive buffers handed to the kernel (provided buffer ring). This is also the rx queue depth:
     /// once all buffers are queued for the user, the kernel holds new datagrams in the socket
@@ -81,10 +77,10 @@ struct UdpOptions {
 
     Timestamping timestamping = Timestamping::Software;
 
-    /// SO_RCVBUF / SO_SNDBUF, 0 keeps the system default. The receive buffer is set with
+    /// SO_RCVBUF / SO_SNDBUF. None: the system default. The receive buffer is set with
     /// SO_RCVBUFFORCE first (ignores net.core.rmem_max, needs CAP_NET_ADMIN), then SO_RCVBUF.
-    int socketRecvBufferSize = 0;
-    int socketSendBufferSize = 0;
+    std::optional<int> socketRecvBufferSize{};
+    std::optional<int> socketSendBufferSize{};
 
     /// SO_REUSEADDR: several sockets/processes may bind the same group and port.
     bool reuseAddress = true;
@@ -94,23 +90,24 @@ struct UdpOptions {
 
 /// Metadata of a received datagram.
 struct DatagramInfo {
-    /// CLOCK_REALTIME (ns) of the reactor poll that delivered the datagram.
-    std::uint64_t receiveTimeNs{0};
-    /// Kernel software receive timestamp (ns), 0 if not available.
-    std::uint64_t softwareTimestampNs{0};
-    /// NIC hardware receive timestamp (ns, NIC clock), 0 if not available.
-    std::uint64_t hardwareTimestampNs{0};
-    /// Sender address, points into the receive buffer (valid until consume()).
-    sockaddr const* source{nullptr};
-    socklen_t sourceLength{0};
-    /// Datagram was longer than UdpOptions::maxDatagramSize.
+    /// Reactor::now() of the poll that delivered the datagram.
+    Timestamp receiveTime{};
+    /// Kernel software receive timestamp, Timestamp{} if not available.
+    Timestamp softwareTimestamp{};
+    /// NIC hardware receive timestamp, Timestamp{} if not available. Taken by the NIC clock: comparable
+    /// with the others only when that clock is synchronized to the system one (phc2sys).
+    Timestamp hardwareTimestamp{};
+    /// Sender.
+    Endpoint source{};
+    /// Datagram was longer than UDPOptions::maxDatagramSize.
     bool truncated{false};
 };
 
 namespace detail {
 
-/// Implementation of UdpConnection (see there). Owned by the handle, released through the reactor.
-class UdpCore final : public IoHandler {
+/// Implementation of UDPConnection (see there). Owned by the handle, released through the reactor.
+template <typename Backend>
+class UDPCore final : public IoHandler {
 private:
     struct Entry {
         std::span<std::byte const> payload;
@@ -121,10 +118,10 @@ private:
 public:
     class Rx {
     private:
-        friend class UdpCore;
-        UdpCore* conn_;
+        friend class UDPCore;
+        UDPCore* conn_;
 
-        explicit Rx(UdpCore* conn) noexcept : conn_{conn} {}
+        explicit Rx(UDPCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// Payload of the oldest datagram. Empty span if the queue is empty (a received empty
@@ -170,10 +167,10 @@ public:
 
     class Tx {
     private:
-        friend class UdpCore;
-        UdpCore* conn_;
+        friend class UDPCore;
+        UDPCore* conn_;
 
-        explicit Tx(UdpCore* conn) noexcept : conn_{conn} {}
+        explicit Tx(UDPCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// Reserve space for one datagram. Empty span if the connection has no destination, is
@@ -240,8 +237,8 @@ public:
     };
 
 private:
-    Ring& ring_;
-    UdpOptions options_;
+    Backend& ring_;
+    UDPOptions options_;
 
     int fd_{-1};
     ConnectionState state_{ConnectionState::Idle};
@@ -252,13 +249,11 @@ private:
     bool rxStalled_{false};
 
     // Provided buffer ring: kernel-shared ring of buffer descriptors + the buffers themselves.
-    std::uint16_t bufferGroupId_;
     unsigned bufferCount_;
     std::size_t bufferStride_{0}; // distance between buffers (cache line aligned)
     unsigned bufferLength_{0};    // usable length given to the kernel: exactly maxDatagramSize of payload
-    MappedRegion bufferRingMemory_;
     MappedRegion buffers_;
-    io_uring_buf_ring* bufferRing_{nullptr};
+    std::optional<typename Backend::BufferPool> pool_; // after buffers_: destroyed first
     msghdr recvTemplate_{}; // describes name/control sizes for multishot recvmsg, must outlive it
 
     // Received datagrams waiting for the user, at most bufferCount_ (each holds a buffer).
@@ -285,10 +280,10 @@ public:
     Rx rx{this};
     Tx tx{this};
 
-    UdpCore(UdpCore const&) = delete;
-    UdpCore& operator=(UdpCore const&) = delete;
+    UDPCore(UDPCore const&) = delete;
+    UDPCore& operator=(UDPCore const&) = delete;
 
-    ~UdpCore() noexcept override;
+    ~UDPCore() noexcept override;
 
     /// Create the socket, bind, join the group and start receiving. Synchronous: on success the
     /// connection is Ready, on failure Closed with error() set. Allowed in Idle and Closed states.
@@ -307,12 +302,12 @@ public:
         return error_;
     }
 
-    [[nodiscard]] auto options() const noexcept -> UdpOptions const& {
+    [[nodiscard]] auto options() const noexcept -> UDPOptions const& {
         return options_;
     }
 
-    /// Bound local port (useful with localPort = 0). 0 when closed.
-    [[nodiscard]] auto localPort() const noexcept -> std::uint16_t;
+    /// Bound local address and port (useful with port 0). Default Endpoint when closed.
+    [[nodiscard]] auto localEndpoint() const noexcept -> Endpoint;
 
     /// Native socket descriptor (-1 when closed). For setsockopt()/getsockopt() only.
     [[nodiscard]] auto nativeHandle() const noexcept -> int {
@@ -320,11 +315,11 @@ public:
     }
 
 private:
-    UdpCore(Ring& ring, UdpOptions options, std::uint16_t bufferGroupId);
+    UDPCore(Backend& ring, UDPOptions options);
 
 public:
     /// Validate options, allocate buffers, register the buffer ring. Throws std::system_error.
-    [[nodiscard]] static auto create(Ring& ring, UdpOptions options) -> UdpCore*;
+    [[nodiscard]] static auto create(Backend& ring, UDPOptions options) -> UDPCore*;
 
 private:
     void onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -345,9 +340,7 @@ private:
     }
 
     TURBOQ_FORCE_INLINE void recycle(std::uint16_t bufferId) noexcept {
-        ::io_uring_buf_ring_add(bufferRing_, buffers_.data() + std::size_t{bufferId} * bufferStride_, bufferLength_,
-            bufferId, ::io_uring_buf_ring_mask(bufferCount_), 0);
-        ::io_uring_buf_ring_advance(bufferRing_, 1);
+        pool_->recycle(bufferId);
     }
 
     void onDatagram(std::int32_t res, std::uint32_t flags) noexcept;
@@ -383,27 +376,28 @@ private:
 ///
 /// Sequencing, gap detection and A/B arbitration are not done here: use two connections and
 /// arbitrate in your code.
-class UdpConnection {
+template <typename Backend>
+class UDPConnection {
 private:
-    detail::UdpCore* core_;
+    detail::UDPCore<Backend>* core_;
 
 public:
-    detail::UdpCore::Rx rx;
-    detail::UdpCore::Tx tx;
+    typename detail::UDPCore<Backend>::Rx rx;
+    typename detail::UDPCore<Backend>::Tx tx;
 
     /// Create a socket served by `reactor` (which must outlive it): allocates and registers the
     /// receive buffers. Does not open: call open(). Throws std::system_error on invalid options,
     /// allocation or registration failure. With TaskRunMode::Deferred create it before the first
     /// poll() or on the polling thread.
-    UdpConnection(Reactor& reactor, UdpOptions options);
+    UDPConnection(Reactor<Backend>& reactor, UDPOptions options);
 
-    UdpConnection(UdpConnection const&) = delete;
-    UdpConnection& operator=(UdpConnection const&) = delete;
+    UDPConnection(UDPConnection const&) = delete;
+    UDPConnection& operator=(UDPConnection const&) = delete;
 
-    UdpConnection(UdpConnection&& other) noexcept
+    UDPConnection(UDPConnection&& other) noexcept
         : core_{std::exchange(other.core_, nullptr)}, rx{other.rx}, tx{other.tx} {}
 
-    UdpConnection& operator=(UdpConnection&& other) noexcept {
+    UDPConnection& operator=(UDPConnection&& other) noexcept {
         if (this != &other) {
             detail::releaseCore(core_);
             core_ = std::exchange(other.core_, nullptr);
@@ -413,8 +407,8 @@ public:
         return *this;
     }
 
-    /// Closes the socket if needed. Never blocks (see TcpConnection::~TcpConnection()).
-    ~UdpConnection() noexcept {
+    /// Closes the socket if needed. Never blocks (see TCPConnection::~TCPConnection()).
+    ~UDPConnection() noexcept {
         detail::releaseCore(core_);
     }
 
@@ -439,13 +433,13 @@ public:
         return core_->error();
     }
 
-    [[nodiscard]] auto options() const noexcept -> UdpOptions const& {
+    [[nodiscard]] auto options() const noexcept -> UDPOptions const& {
         return core_->options();
     }
 
-    /// Bound local port (useful with localPort = 0). 0 when closed.
-    [[nodiscard]] auto localPort() const noexcept -> std::uint16_t {
-        return core_->localPort();
+    /// Bound local address and port (useful with port 0). Default Endpoint when closed.
+    [[nodiscard]] auto localEndpoint() const noexcept -> Endpoint {
+        return core_->localEndpoint();
     }
 
     /// Native socket descriptor (-1 when closed). For setsockopt()/getsockopt() only.

@@ -17,6 +17,7 @@ enum class Error {
     InvalidOptions = 1,
     InvalidState,
     AddressResolutionFailed,
+    InvalidAddress,
     ConnectTimeout,
     ClosedByPeer,
     SubmissionQueueFull,
@@ -48,6 +49,7 @@ struct ErrorCategory final : public std::error_category {
         case Error::InvalidOptions: return "invalid options";
         case Error::InvalidState: return "operation is not allowed in the current state";
         case Error::AddressResolutionFailed: return "failed to resolve address";
+        case Error::InvalidAddress: return "invalid IP address or endpoint";
         case Error::ConnectTimeout: return "connect timeout";
         case Error::ClosedByPeer: return "connection closed by peer";
         case Error::SubmissionQueueFull: return "io_uring submission queue is full";

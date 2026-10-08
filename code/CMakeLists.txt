@@ -24,11 +24,21 @@ endif()
 
 file(GLOB_RECURSE Sources "${CMAKE_CURRENT_SOURCE_DIR}/turboq/reactor/*.cpp")
 file(GLOB_RECURSE Headers "${CMAKE_CURRENT_SOURCE_DIR}/turboq/reactor/*.h")
+list(FILTER Headers EXCLUDE REGEX "TestBackend\\.h$")
 
 if (turboq_reactor_BUILD_TESTS)
     TurboQReactorAddTestsFromSourceList(Sources
         PREFIX ${TargetName}
         COMPILE_OPTIONS -Wall -Wextra -g
+        LIBS doctest::doctest_with_main ${TargetName})
+
+    # Connection tests once more against the epoll backend (see TestBackend.h).
+    set(EpollTestSources ${Sources})
+    list(FILTER EpollTestSources INCLUDE REGEX "(Connection|Lifetime)_test\\.cpp$")
+    TurboQReactorAddTestsFromSourceList(EpollTestSources
+        PREFIX ${TargetName}-epoll
+        COMPILE_OPTIONS -Wall -Wextra -g
+        DEFINITIONS TURBOQ_REACTOR_TEST_EPOLL
         LIBS doctest::doctest_with_main ${TargetName})
 endif()
 

@@ -1,7 +1,7 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
-#include "WsConnection.h"
+#include "WebsocketConnection.h"
 
 #include <algorithm>
 #include <charconv>
@@ -62,38 +62,51 @@ constexpr std::uint16_t kCloseMessageTooBig = 1009;
 
 namespace detail {
 
-auto WsCore::create(Ring& ring, WsOptions options) -> WsCore* {
+template <typename Backend>
+auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> WebsocketCore* {
     auto url = parseWsUrl(options.url);
     if (!url) {
-        throw std::system_error{url.error(), "WsCore"};
+        throw std::system_error{url.error(), "WebsocketCore"};
     }
-    TlsOptions tls = options.tls;
-    tls.enabled = url->secure;
-    std::unique_ptr<TcpCore> tcp{TcpCore::create(ring, {.host = url->host,
-                                                           .port = url->port,
-                                                           .rxBufferSize = options.rxBufferSize,
-                                                           .txBufferSize = options.txBufferSize,
-                                                           .connectTimeout = options.connectTimeout,
-                                                           .noDelay = options.noDelay,
-                                                           .directSend = options.directSend,
-                                                           .tls = std::move(tls)})};
-    auto* conn = new WsCore{ring, tcp.get(), std::move(options), std::move(*url)};
+    // The endpoint is resolved from the URL host on every connect().
+    TCPOptions tcpOptions{.endpoint = {},
+        .rxBufferSize = options.rxBufferSize,
+        .txBufferSize = options.txBufferSize,
+        .connectTimeout = options.connectTimeout,
+        .noDelay = options.noDelay,
+        .directSend = options.directSend};
+    std::unique_ptr<TCPCore<Backend>> tcp;
+    TLSCore<Backend>* tls = nullptr;
+    if (url->secure) {
+        TLSOptions tlsOptions = options.tls;
+        if (!tlsOptions.serverName) {
+            tlsOptions.serverName = url->host; // SNI + verification (by IP for a numeric host)
+        }
+        tls = TLSCore<Backend>::create(ring, std::move(tcpOptions), std::move(tlsOptions));
+        tcp.reset(tls);
+    } else {
+        tcp.reset(TCPCore<Backend>::create(ring, std::move(tcpOptions)));
+    }
+    auto* conn = new WebsocketCore{ring, tcp.get(), tls, std::move(options), std::move(*url)};
     tcp.release(); // owned by conn now
     return conn;
 }
 
-WsCore::WsCore(Ring& ring, TcpCore* tcp, WsOptions options, WsUrl url)
-    : ring_{ring}, tcpCore_{tcp}, tcp_{*tcp}, options_{std::move(options)}, url_{std::move(url)} {
+template <typename Backend>
+WebsocketCore<Backend>::WebsocketCore(
+    Backend& ring, TCPCore<Backend>* tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url)
+    : ring_{ring}, tcpCore_{tcp}, tcp_{*tcp}, tls_{tls}, options_{std::move(options)}, url_{std::move(url)} {
     tcp_.setObserver(this);
     entries_.resize(upperPow2(std::max<std::size_t>(options_.maxQueuedMessages, 1)));
     entriesMask_ = entries_.size() - 1;
-    maxMessageSize_ = options_.maxMessageSize != 0 ? options_.maxMessageSize : tcp_.rx.capacity();
+    maxMessageSize_ = options_.maxMessageSize.value_or(tcp_.rx.capacity());
     pendingControl_.reserve(256);
     detail::fillRandom(&prngState_, sizeof(prngState_));
     prngState_ |= 1; // xorshift state must not be zero
 }
 
-auto WsCore::connect() -> std::expected<void, std::error_code> {
+template <typename Backend>
+auto WebsocketCore<Backend>::connect() -> std::expected<void, std::error_code> {
     if (state_ != ConnectionState::Idle && state_ != ConnectionState::Closed) {
         return std::unexpected(makeErrorCode(Error::InvalidState));
     }
@@ -109,6 +122,21 @@ auto WsCore::connect() -> std::expected<void, std::error_code> {
     httpStatus_ = 0;
     closeReason_.clear();
 
+    // Numeric hosts parse directly; names go through the resolver (blocking), the first address
+    // wins. Exchanges rotate DNS, so this happens on every (re)connect.
+    auto endpoint = IPAddress::parse(url_.host)
+                        .transform([this](IPAddress const& address) {
+                            return std::vector<Endpoint>{Endpoint{address, url_.port}};
+                        })
+                        .or_else([this](std::error_code) {
+                            return resolve(url_.host, url_.port);
+                        });
+    if (!endpoint) {
+        state_ = ConnectionState::Closed;
+        error_ = endpoint.error();
+        return std::unexpected(error_);
+    }
+    tcp_.setEndpoint(endpoint->front());
     if (auto result = tcp_.connect(); !result) {
         state_ = ConnectionState::Closed;
         error_ = result.error();
@@ -118,7 +146,8 @@ auto WsCore::connect() -> std::expected<void, std::error_code> {
     return {};
 }
 
-void WsCore::close(std::uint16_t code, std::string_view reason) noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::close(std::uint16_t code, std::string_view reason) noexcept {
     switch (state_) {
     case ConnectionState::Idle: state_ = ConnectionState::Closed; break;
     case ConnectionState::Ready: {
@@ -142,7 +171,8 @@ void WsCore::close(std::uint16_t code, std::string_view reason) noexcept {
     }
 }
 
-auto WsCore::ping(std::span<std::byte const> payload) noexcept -> bool {
+template <typename Backend>
+auto WebsocketCore<Backend>::ping(std::span<std::byte const> payload) noexcept -> bool {
     if (state_ != ConnectionState::Ready || payload.size() > 125) {
         return false;
     }
@@ -153,7 +183,8 @@ auto WsCore::ping(std::span<std::byte const> payload) noexcept -> bool {
 
 // --- events from the TCP connection -------------------------------------------------------------
 
-void WsCore::onStreamReady() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::onStreamReady() noexcept {
     if (state_ != ConnectionState::Connecting) {
         return;
     }
@@ -168,9 +199,9 @@ void WsCore::onStreamReady() noexcept {
     request += "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ";
     request += handshakeKey_;
     request += "\r\nSec-WebSocket-Version: 13\r\n";
-    if (!options_.subprotocol.empty()) {
+    if (options_.subprotocol) {
         request += "Sec-WebSocket-Protocol: ";
-        request += options_.subprotocol;
+        request += *options_.subprotocol;
         request += "\r\n";
     }
     for (auto const& [name, value] : options_.headers) {
@@ -190,7 +221,8 @@ void WsCore::onStreamReady() noexcept {
     this->armTimeout();
 }
 
-void WsCore::onStreamData() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::onStreamData() noexcept {
     if (state_ == ConnectionState::Handshaking) {
         this->completeUpgrade();
     } else if (state_ == ConnectionState::Ready) {
@@ -199,7 +231,8 @@ void WsCore::onStreamData() noexcept {
     this->flushControl();
 }
 
-void WsCore::onStreamClosed() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::onStreamClosed() noexcept {
     if (state_ != ConnectionState::Closing && state_ != ConnectionState::Closed) {
         // Closed underneath us (peer reset, TLS alert, ...).
         if (!error_) {
@@ -211,10 +244,12 @@ void WsCore::onStreamClosed() noexcept {
     this->finishCloseIfDone();
 }
 
-void WsCore::onCompletion(detail::OpCode op, std::int32_t res, [[maybe_unused]] std::uint32_t flags) noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::onCompletion(
+    detail::OpCode op, std::int32_t res, [[maybe_unused]] std::uint32_t flags) noexcept {
     assert(inflight_ > 0);
     --inflight_;
-    if (op == detail::OpCode::ConnectTimeout) {
+    if (op == detail::OpCode::Timer) {
         timeoutArmed_ = false;
         if (res == -ETIME && state_ == ConnectionState::Handshaking) {
             this->fail(makeErrorCode(Error::WsHandshakeTimeout), 0);
@@ -225,7 +260,8 @@ void WsCore::onCompletion(detail::OpCode op, std::int32_t res, [[maybe_unused]] 
 
 // --- upgrade ------------------------------------------------------------------------------------
 
-void WsCore::completeUpgrade() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::completeUpgrade() noexcept {
     auto const data = tcp_.rx.fetch();
     std::string_view const text{reinterpret_cast<char const*>(data.data()), data.size()};
     auto const headerEnd = text.find("\r\n\r\n");
@@ -256,7 +292,7 @@ void WsCore::completeUpgrade() noexcept {
     bool upgradeOk = false;
     bool connectionOk = false;
     bool acceptOk = false;
-    bool protocolOk = options_.subprotocol.empty();
+    bool protocolOk = !options_.subprotocol;
     bool extensionsOk = true;
     auto const expectedAccept = detail::computeWsAccept(handshakeKey_);
     response = lineEnd == std::string_view::npos ? std::string_view{} : response.substr(lineEnd + 2);
@@ -277,7 +313,7 @@ void WsCore::completeUpgrade() noexcept {
         } else if (name == "sec-websocket-accept") {
             acceptOk = value == expectedAccept;
         } else if (name == "sec-websocket-protocol") {
-            protocolOk = value == options_.subprotocol;
+            protocolOk = options_.subprotocol && value == *options_.subprotocol;
         } else if (name == "sec-websocket-extensions") {
             extensionsOk = false; // none requested (no permessage-deflate)
         }
@@ -297,7 +333,8 @@ void WsCore::completeUpgrade() noexcept {
 
 // --- rx -----------------------------------------------------------------------------------------
 
-void WsCore::releaseTo(std::uint64_t position) noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::releaseTo(std::uint64_t position) noexcept {
     if (position > streamHead_) {
         auto const size = position - streamHead_;
         streamHead_ = position;
@@ -305,7 +342,8 @@ void WsCore::releaseTo(std::uint64_t position) noexcept {
     }
 }
 
-void WsCore::consumeFront() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::consumeFront() noexcept {
     assert(rxHead_ != rxTail_);
     ++rxHead_;
     // Everything before the next held byte can go: the message itself and any control frames
@@ -320,7 +358,8 @@ void WsCore::consumeFront() noexcept {
     }
 }
 
-void WsCore::parseFrames() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::parseFrames() noexcept {
     parseBlocked_ = false;
     while (state_ == ConnectionState::Ready) {
         if (rxTail_ - rxHead_ == entries_.size()) {
@@ -459,7 +498,8 @@ void WsCore::parseFrames() noexcept {
 
 // --- tx -----------------------------------------------------------------------------------------
 
-auto WsCore::nextMaskKey() noexcept -> std::uint32_t {
+template <typename Backend>
+auto WebsocketCore<Backend>::nextMaskKey() noexcept -> std::uint32_t {
     if (options_.masking == WsMasking::Zero) {
         return 0;
     }
@@ -471,7 +511,8 @@ auto WsCore::nextMaskKey() noexcept -> std::uint32_t {
     return key != 0 ? key : 0x5A5A5A5A;
 }
 
-auto WsCore::prepareMessage(std::size_t size) noexcept -> std::span<std::byte> {
+template <typename Backend>
+auto WebsocketCore<Backend>::prepareMessage(std::size_t size) noexcept -> std::span<std::byte> {
     if (state_ != ConnectionState::Ready) [[unlikely]] {
         return {};
     }
@@ -489,7 +530,8 @@ auto WsCore::prepareMessage(std::size_t size) noexcept -> std::span<std::byte> {
     return buffer.subspan(header, size);
 }
 
-void WsCore::commitMessage(std::size_t size, WsOpcode opcode) noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::commitMessage(std::size_t size, WsOpcode opcode) noexcept {
     assert(size <= prepared_ && reservation_ != nullptr);
     auto const header = detail::wsClientHeaderSize(size);
     if (header != reservedHeader_) [[unlikely]] {
@@ -507,12 +549,14 @@ void WsCore::commitMessage(std::size_t size, WsOpcode opcode) noexcept {
     }
 }
 
-void WsCore::flushTx() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::flushTx() noexcept {
     this->flushControl();
     tcp_.tx.flush();
 }
 
-void WsCore::queueControl(WsOpcode opcode, std::span<std::byte const> payload) noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::queueControl(WsOpcode opcode, std::span<std::byte const> payload) noexcept {
     assert(payload.size() <= 125);
     if (pendingControl_.size() + detail::kWsMaxClientHeaderSize + payload.size() > kMaxPendingControl) {
         return; // ping flood while a prepare() is open: drop
@@ -528,7 +572,8 @@ void WsCore::queueControl(WsOpcode opcode, std::span<std::byte const> payload) n
     detail::applyWsMask(out + header, payload.size(), key);
 }
 
-void WsCore::flushControl() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::flushControl() noexcept {
     // Control frames go between messages, never inside an open prepare().
     if (pendingControl_.empty() || prepared_ != 0) {
         return;
@@ -541,7 +586,8 @@ void WsCore::flushControl() noexcept {
 
 // --- closing ------------------------------------------------------------------------------------
 
-void WsCore::fail(std::error_code ec, std::uint16_t closeCode) noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::fail(std::error_code ec, std::uint16_t closeCode) noexcept {
     if (state_ == ConnectionState::Closing || state_ == ConnectionState::Closed) {
         return;
     }
@@ -555,7 +601,8 @@ void WsCore::fail(std::error_code ec, std::uint16_t closeCode) noexcept {
     this->beginClose();
 }
 
-void WsCore::beginClose() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::beginClose() noexcept {
     state_ = ConnectionState::Closing;
     reservation_ = nullptr;
     prepared_ = 0;
@@ -564,45 +611,48 @@ void WsCore::beginClose() noexcept {
     this->finishCloseIfDone();
 }
 
-void WsCore::finishCloseIfDone() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::finishCloseIfDone() noexcept {
     if (state_ == ConnectionState::Closing && inflight_ == 0 && tcp_.state() == ConnectionState::Closed) {
         state_ = ConnectionState::Closed;
     }
 }
 
-void WsCore::armTimeout() noexcept {
-    auto const seconds = std::chrono::duration_cast<std::chrono::seconds>(options_.handshakeTimeout);
-    timeout_.tv_sec = seconds.count();
-    timeout_.tv_nsec =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(options_.handshakeTimeout - seconds).count();
-    auto* sqe = ring_.getSqe();
-    if (!sqe) [[unlikely]] {
+template <typename Backend>
+void WebsocketCore<Backend>::armTimeout() noexcept {
+    timeout_ = detail::toKernelTimespec(options_.handshakeTimeout);
+    if (!ring_.timer(this, &timeout_)) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull), 0);
         return;
     }
-    ::io_uring_prep_timeout(sqe, &timeout_, 0, 0);
-    ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::ConnectTimeout));
     timeoutArmed_ = true;
     ++inflight_;
 }
 
-void WsCore::disarmTimeout() noexcept {
+template <typename Backend>
+void WebsocketCore<Backend>::disarmTimeout() noexcept {
     if (!timeoutArmed_) {
         return;
     }
-    if (auto* sqe = ring_.getSqe(); sqe) {
-        ::io_uring_prep_timeout_remove(sqe, detail::encodeUserData(this, detail::OpCode::ConnectTimeout), 0);
-        ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Cancel));
-        ++inflight_;
-        timeoutArmed_ = false; // its CQE (-ECANCELED) still arrives and is counted in inflight_
-    }
+    ring_.cancelTimer(this);
+    timeoutArmed_ = false; // the timer's completion (-ECANCELED) still arrives, counted in inflight_
 }
 
 } // namespace detail
 
-WsConnection::WsConnection(Reactor& reactor, WsOptions options)
-    : core_{detail::WsCore::create(reactor.ring(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
-    reactor.ring().attach(core_);
+template <typename Backend>
+WebsocketConnection<Backend>::WebsocketConnection(Reactor<Backend>& reactor, WsOptions options)
+    : core_{detail::WebsocketCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx},
+      tx{core_->tx} {
+    reactor.backend().attach(core_);
 }
+
+// The backends this library is built with.
+namespace detail {
+template class WebsocketCore<IoUringBackend>;
+template class WebsocketCore<EpollBackend>;
+} // namespace detail
+template class WebsocketConnection<IoUringBackend>;
+template class WebsocketConnection<EpollBackend>;
 
 } // namespace turboq::reactor

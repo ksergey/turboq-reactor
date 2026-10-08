@@ -33,6 +33,7 @@
 
 #include "Error.h"
 #include "Reactor.h"
+#include "TestBackend.h"
 #include "detail/Tls.h"
 
 namespace turboq::reactor::testing {
@@ -231,7 +232,7 @@ public:
 
 } // namespace
 
-TEST_SUITE("TlsConnection") {
+TEST_SUITE("TLSConnection") {
 
     TEST_CASE("TLS session in every kernel TLS mode") {
         TestCertificate certificate;
@@ -268,12 +269,8 @@ TEST_SUITE("TlsConnection") {
                     }};
 
                 Reactor reactor;
-                TcpConnection conn{reactor, {.host = "127.0.0.1",
-                                                .port = server.port(),
-                                                .tls = {.enabled = true,
-                                                    .serverName = "localhost",
-                                                    .caFile = certificate.pemPath(),
-                                                    .kernelTls = mode}}};
+                TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+                    {.serverName = "localhost", .caFile = certificate.pemPath(), .kernelTls = mode}};
                 REQUIRE(conn.connect());
 
                 // Written while connecting/handshaking: must go out once the connection is Ready.
@@ -327,10 +324,8 @@ TEST_SUITE("TlsConnection") {
                                  return rc <= 0 && ::SSL_get_error(ssl, rc) == SSL_ERROR_ZERO_RETURN;
                              }};
             Reactor reactor;
-            TcpConnection conn{
-                reactor, {.host = "127.0.0.1",
-                             .port = server.port(),
-                             .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = mode}}};
+            TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+                {.caFile = certificate.pemPath(), .kernelTls = mode}};
             REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
@@ -362,8 +357,8 @@ TEST_SUITE("TlsConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TcpConnection conn{reactor,
-            {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .kernelTls = KernelTls::Require}}};
+        TLSConnection conn{
+            reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}, {.kernelTls = KernelTls::Require}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
@@ -382,7 +377,7 @@ TEST_SUITE("TlsConnection") {
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
         // Default trust store: the self-signed test certificate is not in it.
-        TcpConnection conn{reactor, {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true}}};
+        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
@@ -395,10 +390,8 @@ TEST_SUITE("TlsConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TcpConnection conn{
-            reactor, {.host = "127.0.0.1",
-                         .port = server.port(),
-                         .tls = {.enabled = true, .serverName = "wrong.example", .caFile = certificate.pemPath()}}};
+        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+            {.serverName = "wrong.example", .caFile = certificate.pemPath()}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
@@ -410,8 +403,8 @@ TEST_SUITE("TlsConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TcpConnection conn{reactor,
-            {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .caFile = certificate.pemPath()}}};
+        TLSConnection conn{
+            reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}, {.caFile = certificate.pemPath()}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready;
@@ -428,8 +421,7 @@ TEST_SUITE("TlsConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TcpConnection conn{
-            reactor, {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true, .verifyPeer = false}}};
+        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}, {.verifyPeer = false}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready || conn.state() == ConnectionState::Closed;
@@ -441,8 +433,8 @@ TEST_SUITE("TlsConnection") {
     TEST_CASE("handshake timeout") {
         TlsServer silent; // accepts TCP (kernel backlog), never speaks TLS
         Reactor reactor;
-        TcpConnection conn{
-            reactor, {.host = "127.0.0.1", .port = silent.port(), .tls = {.enabled = true, .handshakeTimeout = 200ms}}};
+        TLSConnection conn{
+            reactor, {.endpoint = {IPv4Address::loopback(), silent.port()}}, {.handshakeTimeout = 200ms}};
         REQUIRE(conn.connect());
         auto const start = std::chrono::steady_clock::now();
         REQUIRE(pollUntil(reactor, [&] {
@@ -455,7 +447,7 @@ TEST_SUITE("TlsConnection") {
     TEST_CASE("peer closing during the handshake fails the connection") {
         TlsServer server;
         Reactor reactor;
-        TcpConnection conn{reactor, {.host = "127.0.0.1", .port = server.port(), .tls = {.enabled = true}}};
+        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Handshaking;
@@ -470,7 +462,7 @@ TEST_SUITE("TlsConnection") {
     TEST_CASE("user close during the handshake") {
         TlsServer silent;
         Reactor reactor;
-        TcpConnection conn{reactor, {.host = "127.0.0.1", .port = silent.port(), .tls = {.enabled = true}}};
+        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), silent.port()}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Handshaking;
@@ -695,12 +687,9 @@ TEST_SUITE("TlsConnection") {
                              return ok;
                          }};
         Reactor reactor;
-        TcpConnection conn{
-            reactor, {.host = "127.0.0.1",
-                         .port = server.port(),
-                         .rxBufferSize = 4096,
-                         .txBufferSize = 8192,
-                         .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+        TLSConnection conn{reactor,
+            {.endpoint = {IPv4Address::loopback(), server.port()}, .rxBufferSize = 4096, .txBufferSize = 8192},
+            {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
         REQUIRE(conn.connect());
 
         std::size_t received = 0;
@@ -753,10 +742,8 @@ TEST_SUITE("TlsConnection") {
                 return readExactly(ssl, 5) == "reply";
             }};
         Reactor reactor;
-        TcpConnection conn{
-            reactor, {.host = "127.0.0.1",
-                         .port = server.port(),
-                         .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+            {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.rx.fetch().size() == 11;
@@ -781,10 +768,8 @@ TEST_SUITE("TlsConnection") {
                              return true;
                          }};
         Reactor reactor;
-        TcpConnection conn{
-            reactor, {.host = "127.0.0.1",
-                         .port = server.port(),
-                         .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+            {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
@@ -806,11 +791,8 @@ TEST_SUITE("TlsConnection") {
                              return true;
                          }};
         Reactor reactor;
-        TcpConnection conn{
-            reactor, {.host = "127.0.0.1",
-                         .port = server.port(),
-                         .rxBufferSize = 4096,
-                         .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}, .rxBufferSize = 4096},
+            {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
         REQUIRE(conn.connect());
         // Do not consume: the connection closes with most of the data still undecrypted.
         REQUIRE(pollUntil(reactor, [&] {
@@ -871,7 +853,7 @@ TEST_SUITE("TlsConnection") {
                              return true;
                          }};
         Reactor reactor;
-        WsConnection ws{reactor,
+        WebsocketConnection ws{reactor,
             {.url = "wss://127.0.0.1:" + std::to_string(server.port()) + "/stream",
                 .tls = {.serverName = "localhost", .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable},
                 .rxBufferSize = 8192}};
@@ -907,11 +889,9 @@ TEST_SUITE("TlsConnection") {
         {
             TlsServer server{certificate.serverContext(), streamForever};
             {
-                TcpConnection conn{reactor,
-                    {.host = "127.0.0.1",
-                        .port = server.port(),
-                        .rxBufferSize = 4096,
-                        .tls = {.enabled = true, .caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}}};
+                TLSConnection conn{reactor,
+                    {.endpoint = {IPv4Address::loopback(), server.port()}, .rxBufferSize = 4096},
+                    {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
                 REQUIRE(conn.connect());
                 REQUIRE(pollUntil(reactor, [&] {
                     return conn.rx.fetch().size() == 4096; // plaintext ring full, ciphertext piling up
@@ -950,11 +930,11 @@ TEST_SUITE("TlsConnection") {
                                  return true;
                              }};
             {
-                WsConnection ws{reactor, {.url = "wss://127.0.0.1:" + std::to_string(server.port()) + "/",
-                                             .tls = {.serverName = "localhost",
-                                                 .caFile = certificate.pemPath(),
-                                                 .kernelTls = KernelTls::Disable},
-                                             .rxBufferSize = 8192}};
+                WebsocketConnection ws{reactor, {.url = "wss://127.0.0.1:" + std::to_string(server.port()) + "/",
+                                                    .tls = {.serverName = "localhost",
+                                                        .caFile = certificate.pemPath(),
+                                                        .kernelTls = KernelTls::Disable},
+                                                    .rxBufferSize = 8192}};
                 REQUIRE(ws.connect());
                 REQUIRE(pollUntil(reactor, [&] {
                     return ws.rx.size() >= 2;

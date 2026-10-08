@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -19,15 +20,14 @@
 
 #include <turboq/Platform.h>
 
-#include "TcpConnection.h"
+#include "TCPConnection.h"
+#include "TLSConnection.h"
 #include "Types.h"
 #include "detail/IoHandler.h"
 #include "detail/StreamObserver.h"
-#include "detail/WsProtocol.h"
+#include "detail/WebsocketProtocol.h"
 
 namespace turboq::reactor {
-
-class Reactor;
 
 enum class WsOpcode : std::uint8_t {
     Continuation = 0x0,
@@ -51,10 +51,10 @@ struct WsOptions {
     std::string url{};
     /// Extra request headers for the upgrade (Origin, API keys, ...).
     std::vector<std::pair<std::string, std::string>> headers{};
-    /// Sec-WebSocket-Protocol to request; the server must accept it. Empty for none.
-    std::string subprotocol{};
-    /// TLS settings for wss:// (`enabled` is implied by the scheme).
-    TlsOptions tls{};
+    /// Sec-WebSocket-Protocol to request; the server must accept it. None: no subprotocol.
+    std::optional<std::string> subprotocol{};
+    /// TLS settings for wss:// (ignored for ws://).
+    TLSOptions tls{};
 
     /// Underlying TCP rings. The largest message (all its fragments, plus unconsumed messages
     /// before it) must fit into the rx ring.
@@ -62,8 +62,8 @@ struct WsOptions {
     std::size_t txBufferSize = 1u << 20;
     /// Received messages that can wait for the user. When full, parsing pauses until consume().
     std::size_t maxQueuedMessages = 65536;
-    /// Reject messages above this size (close 1009). 0 means limited only by rxBufferSize.
-    std::size_t maxMessageSize = 0;
+    /// Reject messages above this size (close 1009). None: limited only by rxBufferSize.
+    std::optional<std::size_t> maxMessageSize{};
 
     std::chrono::milliseconds connectTimeout{5000};
     /// Timeout for the HTTP upgrade (after TCP connect and TLS handshake).
@@ -75,13 +75,14 @@ struct WsOptions {
 
 namespace detail {
 
-/// Implementation of WsConnection (see there). Owned by the handle, released through the reactor.
-class WsCore final : public IoHandler, private StreamObserver {
+/// Implementation of WebsocketConnection (see there). Owned by the handle, released through the reactor.
+template <typename Backend>
+class WebsocketCore final : public IoHandler, private StreamObserver {
 private:
     struct Entry {
         std::uint64_t begin;   // stream position of the message's first frame header
         std::uint64_t payload; // stream position of the payload
-        std::uint64_t timestamp;
+        Timestamp timestamp;
         std::uint32_t size;
         WsOpcode opcode;
     };
@@ -89,10 +90,10 @@ private:
 public:
     class Rx {
     private:
-        friend class WsCore;
-        WsCore* conn_;
+        friend class WebsocketCore;
+        WebsocketCore* conn_;
 
-        explicit Rx(WsCore* conn) noexcept : conn_{conn} {}
+        explicit Rx(WebsocketCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// Payload of the oldest message, empty span if there is none (check empty() to tell an
@@ -112,7 +113,7 @@ public:
         }
 
         /// CLOCK_REALTIME (ns) of the poll that received the message's last byte.
-        [[nodiscard]] TURBOQ_FORCE_INLINE auto timestamp() const noexcept -> std::uint64_t {
+        [[nodiscard]] TURBOQ_FORCE_INLINE auto timestamp() const noexcept -> Timestamp {
             assert(!this->empty());
             return conn_->front().timestamp;
         }
@@ -133,10 +134,10 @@ public:
 
     class Tx {
     private:
-        friend class WsCore;
-        WsCore* conn_;
+        friend class WebsocketCore;
+        WebsocketCore* conn_;
 
-        explicit Tx(WsCore* conn) noexcept : conn_{conn} {}
+        explicit Tx(WebsocketCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// Reserve space for a message of up to `size` bytes. Empty span if the connection is not
@@ -180,9 +181,10 @@ public:
     };
 
 private:
-    Ring& ring_;
-    std::unique_ptr<TcpCore> tcpCore_; // owned: lives and dies with this connection
-    TcpCore& tcp_;
+    Backend& ring_;
+    std::unique_ptr<TCPCore<Backend>> tcpCore_; // owned: lives and dies with this connection
+    TCPCore<Backend>& tcp_;
+    TLSCore<Backend>* tls_; // the same object as tcp_ for wss://, nullptr for ws://
     WsOptions options_;
     WsUrl url_;
 
@@ -223,10 +225,10 @@ public:
     Rx rx{this};
     Tx tx{this};
 
-    WsCore(WsCore const&) = delete;
-    WsCore& operator=(WsCore const&) = delete;
+    WebsocketCore(WebsocketCore const&) = delete;
+    WebsocketCore& operator=(WebsocketCore const&) = delete;
 
-    ~WsCore() noexcept override = default;
+    ~WebsocketCore() noexcept override = default;
 
     /// Connect: TCP, TLS (wss), HTTP upgrade. Allowed in Idle and Closed states. Drops messages
     /// still queued from the previous session.
@@ -270,20 +272,20 @@ public:
         return options_;
     }
 
-    [[nodiscard]] auto lastReceiveTime() const noexcept -> std::uint64_t {
+    [[nodiscard]] auto lastReceiveTime() const noexcept -> Timestamp {
         return tcp_.rx.timestamp();
     }
 
     [[nodiscard]] auto tlsVersion() const noexcept -> std::string_view {
-        return tcp_.tlsVersion();
+        return tls_ ? tls_->tlsVersion() : std::string_view{};
     }
 
     [[nodiscard]] auto tlsCipher() const noexcept -> std::string_view {
-        return tcp_.tlsCipher();
+        return tls_ ? tls_->tlsCipher() : std::string_view{};
     }
 
     [[nodiscard]] auto kernelTlsOffload() const noexcept -> KernelTlsOffload {
-        return tcp_.kernelTlsOffload();
+        return tls_ ? tls_->kernelTlsOffload() : KernelTlsOffload::None;
     }
 
     [[nodiscard]] auto nativeHandle() const noexcept -> int {
@@ -291,11 +293,11 @@ public:
     }
 
 private:
-    WsCore(Ring& ring, TcpCore* tcp, WsOptions options, WsUrl url);
+    WebsocketCore(Backend& ring, TCPCore<Backend>* tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url);
 
 public:
     /// Parse the URL, create the TCP layer. Throws std::system_error.
-    [[nodiscard]] static auto create(Ring& ring, WsOptions options) -> WsCore*;
+    [[nodiscard]] static auto create(Backend& ring, WsOptions options) -> WebsocketCore*;
 
 private:
     void onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -362,25 +364,26 @@ private:
 /// Frames are parsed in Reactor::poll(): payloads stay where the kernel put them in the TCP rx
 /// ring (zero copy; fragmented messages are joined in place). Ping is answered with Pong, a Close
 /// from the server is echoed and closes the connection. UTF-8 of text messages is not validated.
-class WsConnection {
+template <typename Backend>
+class WebsocketConnection {
 private:
-    detail::WsCore* core_;
+    detail::WebsocketCore<Backend>* core_;
 
 public:
-    detail::WsCore::Rx rx;
-    detail::WsCore::Tx tx;
+    typename detail::WebsocketCore<Backend>::Rx rx;
+    typename detail::WebsocketCore<Backend>::Tx tx;
 
     /// Create a connection served by `reactor` (which must outlive it). Does not connect: call
     /// connect(). Throws std::system_error on an invalid URL/options or allocation failure.
-    WsConnection(Reactor& reactor, WsOptions options);
+    WebsocketConnection(Reactor<Backend>& reactor, WsOptions options);
 
-    WsConnection(WsConnection const&) = delete;
-    WsConnection& operator=(WsConnection const&) = delete;
+    WebsocketConnection(WebsocketConnection const&) = delete;
+    WebsocketConnection& operator=(WebsocketConnection const&) = delete;
 
-    WsConnection(WsConnection&& other) noexcept
+    WebsocketConnection(WebsocketConnection&& other) noexcept
         : core_{std::exchange(other.core_, nullptr)}, rx{other.rx}, tx{other.tx} {}
 
-    WsConnection& operator=(WsConnection&& other) noexcept {
+    WebsocketConnection& operator=(WebsocketConnection&& other) noexcept {
         if (this != &other) {
             detail::releaseCore(core_);
             core_ = std::exchange(other.core_, nullptr);
@@ -390,8 +393,8 @@ public:
         return *this;
     }
 
-    /// Sends Close if Ready and closes. Never blocks (see TcpConnection::~TcpConnection()).
-    ~WsConnection() noexcept {
+    /// Sends Close if Ready and closes. Never blocks (see TCPConnection::~TCPConnection()).
+    ~WebsocketConnection() noexcept {
         detail::releaseCore(core_);
     }
 
@@ -436,10 +439,10 @@ public:
         return core_->options();
     }
 
-    /// CLOCK_REALTIME (ns, Reactor::now() clock) of the poll that last received anything on this
+    /// Reactor::now() of the poll that last received anything on this
     /// connection, server pings included; 0 before the first byte. For liveness watchdogs: a quiet
     /// stream with regular pings is alive.
-    [[nodiscard]] auto lastReceiveTime() const noexcept -> std::uint64_t {
+    [[nodiscard]] auto lastReceiveTime() const noexcept -> Timestamp {
         return core_->lastReceiveTime();
     }
 

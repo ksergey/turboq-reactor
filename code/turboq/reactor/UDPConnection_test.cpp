@@ -16,13 +16,12 @@
 
 #include "Error.h"
 #include "Reactor.h"
+#include "TestBackend.h"
 
 namespace turboq::reactor::testing {
 namespace {
 
 using namespace std::chrono_literals;
-
-constexpr std::array kTaskRunModes = {TaskRunMode::Interrupt, TaskRunMode::Cooperative, TaskRunMode::Deferred};
 
 template <typename Pred>
 [[nodiscard]] auto pollUntil(Reactor& reactor, Pred pred, std::chrono::milliseconds timeout = 2000ms) -> bool {
@@ -86,32 +85,31 @@ public:
 };
 
 [[nodiscard]] auto sourcePort(DatagramInfo const& info) -> std::uint16_t {
-    REQUIRE(info.source != nullptr);
-    REQUIRE_EQ(info.source->sa_family, AF_INET);
-    return ntohs(reinterpret_cast<sockaddr_in const*>(info.source)->sin_port);
+    REQUIRE(info.source.address.isV4());
+    return info.source.port;
 }
 
 } // namespace
 
-TEST_SUITE("UdpConnection") {
+TEST_SUITE("UDPConnection") {
 
     TEST_CASE("unicast exchange between two connections") {
-        for (auto const mode : kTaskRunModes) {
-            CAPTURE(static_cast<int>(mode));
+        for (auto const& config : kReactorConfigs) {
+            CAPTURE(&config - kReactorConfigs.data());
             for (bool const directSend : {true, false}) {
                 CAPTURE(directSend);
-                Reactor reactor{{.taskRunMode = mode}};
+                Reactor reactor{config};
 
-                UdpConnection server{reactor, {.localAddress = "127.0.0.1"}};
+                UDPConnection server{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
                 REQUIRE(server.open());
                 REQUIRE_EQ(server.state(), ConnectionState::Ready);
-                REQUIRE_NE(server.localPort(), 0);
+                REQUIRE_NE(server.localEndpoint().port, 0);
                 REQUIRE(server.tx.prepare(1).empty()); // no destination
 
-                UdpConnection client{reactor, {.localAddress = "127.0.0.1",
-                                                  .remoteAddress = "127.0.0.1",
-                                                  .remotePort = server.localPort(),
-                                                  .directSend = directSend}};
+                UDPConnection client{
+                    reactor, {.local = Endpoint{IPv4Address::loopback()},
+                                 .remote = Endpoint{IPv4Address::loopback(), server.localEndpoint().port},
+                                 .directSend = directSend}};
                 REQUIRE(client.open());
                 REQUIRE_EQ(client.state(), ConnectionState::Ready);
 
@@ -121,7 +119,7 @@ TEST_SUITE("UdpConnection") {
                 REQUIRE(client.tx.push(asBytes("warm-up")));
                 client.tx.flush();
                 REQUIRE(pollUntil(reactor, [&] {
-                    if (!server.rx.empty() && server.rx.info().softwareTimestampNs == 0) {
+                    if (!server.rx.empty() && server.rx.info().softwareTimestamp == Timestamp{}) {
                         server.rx.consume();
                         REQUIRE(client.tx.push(asBytes("warm-up")));
                         client.tx.flush();
@@ -148,9 +146,9 @@ TEST_SUITE("UdpConnection") {
                     REQUIRE_FALSE(server.rx.empty());
                     REQUIRE_EQ(asString(server.rx.fetch()), expected);
                     auto const& info = server.rx.info();
-                    REQUIRE_EQ(sourcePort(info), client.localPort());
-                    REQUIRE_NE(info.receiveTimeNs, 0);
-                    REQUIRE_NE(info.softwareTimestampNs, 0);
+                    REQUIRE_EQ(sourcePort(info), client.localEndpoint().port);
+                    REQUIRE(info.receiveTime != Timestamp{});
+                    REQUIRE(info.softwareTimestamp != Timestamp{});
                     REQUIRE_FALSE(info.truncated);
                     server.rx.consume();
                 }
@@ -162,22 +160,22 @@ TEST_SUITE("UdpConnection") {
 
     TEST_CASE("timestamping can be disabled") {
         Reactor reactor;
-        UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .timestamping = Timestamping::None}};
+        UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .timestamping = Timestamping::None}};
         REQUIRE(conn.open());
-        Sender sender{conn.localPort()};
+        Sender sender{conn.localEndpoint().port};
         sender.send("x");
         REQUIRE(pollUntil(reactor, [&] {
             return !conn.rx.empty();
         }));
-        REQUIRE_EQ(conn.rx.info().softwareTimestampNs, 0);
-        REQUIRE_EQ(conn.rx.info().hardwareTimestampNs, 0);
+        REQUIRE(conn.rx.info().softwareTimestamp == Timestamp{});
+        REQUIRE(conn.rx.info().hardwareTimestamp == Timestamp{});
     }
 
     TEST_CASE("long datagrams are truncated") {
         Reactor reactor;
-        UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .maxDatagramSize = 64}};
+        UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .maxDatagramSize = 64}};
         REQUIRE(conn.open());
-        Sender sender{conn.localPort()};
+        Sender sender{conn.localEndpoint().port};
         sender.send(std::string(100, 'z'));
         REQUIRE(pollUntil(reactor, [&] {
             return !conn.rx.empty();
@@ -187,12 +185,12 @@ TEST_SUITE("UdpConnection") {
     }
 
     TEST_CASE("running out of buffers stalls and resumes without loss") {
-        for (auto const mode : kTaskRunModes) {
-            CAPTURE(static_cast<int>(mode));
-            Reactor reactor{{.taskRunMode = mode}};
-            UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .bufferCount = 8}};
+        for (auto const& config : kReactorConfigs) {
+            CAPTURE(&config - kReactorConfigs.data());
+            Reactor reactor{config};
+            UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 8}};
             REQUIRE(conn.open());
-            Sender sender{conn.localPort()};
+            Sender sender{conn.localEndpoint().port};
 
             constexpr int kCount = 100; // fits easily into the default socket receive buffer
             for (int i = 0; i < kCount; ++i) {
@@ -222,9 +220,10 @@ TEST_SUITE("UdpConnection") {
 
     TEST_CASE("kernel drops are reported") {
         Reactor reactor;
-        UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .bufferCount = 1, .socketRecvBufferSize = 4096}};
+        UDPConnection conn{
+            reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 1, .socketRecvBufferSize = 4096}};
         REQUIRE(conn.open());
-        Sender sender{conn.localPort()};
+        Sender sender{conn.localEndpoint().port};
 
         // Nobody reads while these are sent into a tiny socket buffer: most get dropped by the kernel.
         for (int i = 0; i < 2000; ++i) {
@@ -250,9 +249,9 @@ TEST_SUITE("UdpConnection") {
 
     TEST_CASE("close keeps received datagrams, open drops them") {
         Reactor reactor;
-        UdpConnection conn{reactor, {.localAddress = "127.0.0.1", .localPort = 0}};
+        UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
         REQUIRE(conn.open());
-        auto const port = conn.localPort();
+        auto const port = conn.localEndpoint().port;
         Sender sender{port};
         sender.send("kept");
         REQUIRE(pollUntil(reactor, [&] {
@@ -269,7 +268,7 @@ TEST_SUITE("UdpConnection") {
 
         REQUIRE(conn.open());
         REQUIRE(conn.rx.empty());
-        Sender sender2{conn.localPort()};
+        Sender sender2{conn.localEndpoint().port};
         sender2.send("fresh");
         REQUIRE(pollUntil(reactor, [&] {
             return !conn.rx.empty();
@@ -284,30 +283,35 @@ TEST_SUITE("UdpConnection") {
 
     TEST_CASE("invalid configuration is reported") {
         Reactor reactor;
-        UdpConnection badGroup{reactor, {.group = "not-an-address", .localPort = 30000}};
-        REQUIRE_FALSE(badGroup.open());
-        REQUIRE_EQ(badGroup.state(), ConnectionState::Closed);
-        REQUIRE_EQ(badGroup.error(), makeErrorCode(Error::AddressResolutionFailed));
+        UDPConnection notMulticast{reactor, {.group = Endpoint{IPv4Address{10, 0, 0, 1}, 30000}}};
+        REQUIRE_FALSE(notMulticast.open());
+        REQUIRE_EQ(notMulticast.state(), ConnectionState::Closed);
+        REQUIRE_EQ(notMulticast.error(), makeErrorCode(Error::InvalidOptions));
 
-        UdpConnection badInterface{reactor, {.group = "239.1.1.1", .interface = "no-such-if0", .localPort = 30000}};
+        UDPConnection sourceWithoutGroup{reactor, {.source = IPv4Address{10, 0, 0, 1}}};
+        REQUIRE_FALSE(sourceWithoutGroup.open());
+        REQUIRE_EQ(sourceWithoutGroup.error(), makeErrorCode(Error::InvalidOptions));
+
+        UDPConnection badInterface{
+            reactor, {.group = Endpoint{IPv4Address{239, 1, 1, 1}, 30000}, .interface = "no-such-if0"}};
         REQUIRE_FALSE(badInterface.open());
         REQUIRE_EQ(badInterface.state(), ConnectionState::Closed);
 
-        UdpConnection mixedFamilies{reactor, {.localAddress = "::1", .remoteAddress = "127.0.0.1", .remotePort = 1}};
+        UDPConnection mixedFamilies{
+            reactor, {.local = Endpoint{IPv6Address::loopback()}, .remote = Endpoint{IPv4Address::loopback(), 1}}};
         REQUIRE_FALSE(mixedFamilies.open());
         REQUIRE_EQ(mixedFamilies.state(), ConnectionState::Closed);
         REQUIRE_EQ(mixedFamilies.error(), makeErrorCode(Error::InvalidOptions));
 
-        REQUIRE_THROWS_AS(UdpConnection(reactor, {.maxDatagramSize = 0}), std::system_error);
+        REQUIRE_THROWS_AS(UDPConnection(reactor, {.maxDatagramSize = 0}), std::system_error);
     }
 
     TEST_CASE("tx queue depth limits queued datagrams") {
         Reactor reactor;
-        UdpConnection sink{reactor, {.localAddress = "127.0.0.1"}};
+        UDPConnection sink{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
         REQUIRE(sink.open());
-        UdpConnection conn{reactor, {.localAddress = "127.0.0.1",
-                                        .remoteAddress = "127.0.0.1",
-                                        .remotePort = sink.localPort(),
+        UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()},
+                                        .remote = Endpoint{IPv4Address::loopback(), sink.localEndpoint().port},
                                         .txQueueDepth = 4}};
         REQUIRE(conn.open());
         for (int i = 0; i < 4; ++i) {
@@ -324,10 +328,10 @@ TEST_SUITE("UdpConnection") {
 
     TEST_CASE("multicast: each socket sees only its own group") {
         Reactor reactor;
-        constexpr std::uint16_t kPort = 31337;
-        UdpConnection lineA{reactor, {.group = "239.255.10.1", .localPort = kPort}};
+        constexpr std::uint16_t kPort = kFixedPortBase + 37;
+        UDPConnection lineA{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 1}, kPort}}};
         auto const openedA = lineA.open();
-        UdpConnection lineB{reactor, {.group = "239.255.10.2", .localPort = kPort}};
+        UDPConnection lineB{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 2}, kPort}}};
         auto const openedB = lineB.open();
         if (!openedA || !openedB) {
             MESSAGE("multicast is not available here, skipping: ", lineA.error().message());
@@ -363,13 +367,13 @@ TEST_SUITE("UdpConnection") {
 
     TEST_CASE("multicast: send to a group through the tx queue") {
         Reactor reactor;
-        constexpr std::uint16_t kPort = 31338;
-        UdpConnection receiver{reactor, {.group = "239.255.10.3", .localPort = kPort}};
+        constexpr std::uint16_t kPort = kFixedPortBase + 38;
+        UDPConnection receiver{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 3}, kPort}}};
         if (!receiver.open()) {
             MESSAGE("multicast is not available here, skipping: ", receiver.error().message());
             return;
         }
-        UdpConnection publisher{reactor, {.remoteAddress = "239.255.10.3", .remotePort = kPort}};
+        UDPConnection publisher{reactor, {.remote = Endpoint{IPv4Address{239, 255, 10, 3}, kPort}}};
         REQUIRE(publisher.open());
         REQUIRE_EQ(publisher.state(), ConnectionState::Ready);
         REQUIRE(publisher.tx.push(asBytes("snapshot request")));
@@ -385,7 +389,7 @@ TEST_SUITE("UdpConnection") {
             return;
         }
         REQUIRE_EQ(asString(receiver.rx.fetch()), "snapshot request");
-        REQUIRE_EQ(sourcePort(receiver.rx.info()), publisher.localPort());
+        REQUIRE_EQ(sourcePort(receiver.rx.info()), publisher.localEndpoint().port);
     }
 }
 
