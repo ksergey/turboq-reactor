@@ -13,7 +13,8 @@
 //   binance_market_data --streams btcusdt@trade,ethusdt@bookTicker
 //   binance_market_data --streams btcusdt@depth@100ms --live-subscribe --busy-poll --cpu 3
 //
-// Needs the tls kernel module (modprobe tls); see README.
+// Kernel TLS (sudo modprobe tls) is preferred; without it TLS runs in OpenSSL in userspace and the
+// example says so once at connect.
 
 #include <sched.h>
 
@@ -90,6 +91,7 @@ public:
 struct Config {
     std::vector<std::string> streams;
     std::string baseUrl;
+    std::string caFile;
     bool liveSubscribe = false;
     /// Nothing received (data or server ping) for this long: reconnect. Binance pings every 20 s.
     std::chrono::milliseconds staleTimeout{30s};
@@ -186,6 +188,7 @@ private:
                                         : config.baseUrl + "/stream?streams=" + joinStreams(config.streams, '/');
         return WsOptions{
             .url = std::move(url),
+            .tls = {.caFile = config.caFile},
             .rxBufferSize = 4u << 20, // largest message + backlog must fit (depth snapshots are big)
             .maxQueuedMessages = 1u << 16,
             .connectTimeout = 5s,
@@ -200,6 +203,20 @@ private:
             this->scheduleReconnect(now);
         }
         lastState_ = ws_.state();
+    }
+
+    [[nodiscard]] auto describeTls() const -> std::string {
+        if (ws_.tlsVersion().empty()) {
+            return {};
+        }
+        std::string_view offload;
+        switch (ws_.kernelTlsOffload()) {
+        case KernelTlsOffload::Full: offload = "kernel TLS"; break;
+        case KernelTlsOffload::None: offload = "userspace TLS"; break;
+        case KernelTlsOffload::SendOnly: offload = "kernel TLS send, userspace receive"; break;
+        case KernelTlsOffload::ReceiveOnly: offload = "kernel TLS receive, userspace send"; break;
+        }
+        return std::format(" ({} {}, {})", ws_.tlsVersion(), ws_.tlsCipher(), offload);
     }
 
     void scheduleReconnect(Clock::time_point now) {
@@ -219,9 +236,12 @@ private:
             ++sessions_;
             readyAt_ = now;
             readyAtNs_ = reactor_.now();
-            std::println(stderr, "{} connected{}{}{}{}, session #{}", formatTime(realtimeNs()),
-                ws_.tlsVersion().empty() ? "" : " (", ws_.tlsVersion(), ws_.tlsVersion().empty() ? "" : " ",
-                ws_.tlsCipher().empty() ? std::string{} : std::string{ws_.tlsCipher()} + ")", sessions_);
+            std::println(stderr, "{} connected{}, session #{}", formatTime(realtimeNs()), describeTls(), sessions_);
+            if (!ws_.tlsVersion().empty() && ws_.kernelTlsOffload() != KernelTlsOffload::Full && !kernelTlsHintShown_) {
+                // Works, but crypto runs on this thread with an extra copy: say why, once.
+                std::println(stderr, "{} kernel TLS: {}", formatTime(realtimeNs()), describeKernelTlsSupport());
+                kernelTlsHintShown_ = true;
+            }
             if (config_.liveSubscribe) {
                 this->subscribe();
             }
@@ -322,6 +342,8 @@ auto main(int argc, char** argv) -> int {
                 cxxopts::value<std::string>()->default_value("btcusdt@trade,btcusdt@bookTicker"))
             ("url", "base endpoint; wss://data-stream.binance.vision serves market data only",
                 cxxopts::value<std::string>()->default_value("wss://stream.binance.com:9443"))
+            ("ca-file", "trusted CA certificates (default: system store); for testing against a local server",
+                cxxopts::value<std::string>()->default_value(""))
             ("live-subscribe", "connect to /ws and send SUBSCRIBE after every (re)connect")
             ("stale-timeout", "reconnect when nothing (not even a ping) arrives for this many ms",
                 cxxopts::value<unsigned>()->default_value("30000"))
@@ -340,6 +362,7 @@ auto main(int argc, char** argv) -> int {
         Config config{
             .streams = splitList(args["streams"].as<std::string>()),
             .baseUrl = args["url"].as<std::string>(),
+            .caFile = args["ca-file"].as<std::string>(),
             .liveSubscribe = args.count("live-subscribe") > 0,
             .staleTimeout = std::chrono::milliseconds{args["stale-timeout"].as<unsigned>()},
             .backoffInitial = std::chrono::milliseconds{args["backoff-initial"].as<unsigned>()},
