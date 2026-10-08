@@ -19,7 +19,6 @@ constexpr std::size_t kMaxResponseHeaderSize = 16 * 1024;
 constexpr std::size_t kMaxPendingControl = 64 * 1024;
 
 // Close codes we send.
-constexpr std::uint16_t kCloseNormal = 1000;
 constexpr std::uint16_t kCloseProtocolError = 1002;
 constexpr std::uint16_t kCloseNoStatus = 1005;
 constexpr std::uint16_t kCloseMessageTooBig = 1009;

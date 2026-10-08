@@ -251,6 +251,26 @@ TEST_SUITE("TcpConnection") {
         ::close(peer);
     }
 
+    TEST_CASE("close() sends committed data first") {
+        Listener listener;
+        Reactor reactor;
+        TcpConnection conn{reactor, {.host = "127.0.0.1", .port = listener.port(), .directSend = false}};
+        REQUIRE(conn.connect());
+        REQUIRE(pollUntil(reactor, [&] {
+            return conn.state() == ConnectionState::Ready;
+        }));
+        int const peer = listener.accept();
+        REQUIRE(conn.tx.push(asBytes("goodbye"))); // committed, not sent: no poll() before close()
+        conn.close();
+        REQUIRE(pollUntil(reactor, [&] {
+            return conn.state() == ConnectionState::Closed;
+        }));
+        REQUIRE_EQ(readExactly(peer, 7), "goodbye");
+        char byte;
+        REQUIRE_EQ(::recv(peer, &byte, 1, 0), 0);
+        ::close(peer);
+    }
+
     TEST_CASE("connect() is rejected while connected") {
         Listener listener;
         Reactor reactor;

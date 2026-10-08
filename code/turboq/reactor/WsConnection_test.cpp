@@ -282,11 +282,6 @@ TEST_SUITE("WsConnection") {
             }
             auto const original = data;
             detail::applyWsMask(data.data(), size, 0xA1B2C3D4);
-            for (std::size_t i = 0; i < size; ++i) {
-                auto const* key =
-                    reinterpret_cast<unsigned char const*>(&static_cast<std::uint32_t const&>(0xA1B2C3D4));
-                (void)key;
-            }
             std::uint32_t const k = 0xA1B2C3D4;
             auto const* key = reinterpret_cast<unsigned char const*>(&k);
             for (std::size_t i = 0; i < size; ++i) {

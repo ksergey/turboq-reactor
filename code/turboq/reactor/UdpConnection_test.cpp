@@ -115,6 +115,21 @@ TEST_SUITE("UdpConnection") {
                 REQUIRE(client.open());
                 REQUIRE_EQ(client.state(), ConnectionState::Ready);
 
+                // The kernel switches receive timestamping on asynchronously (a global static key
+                // flipped from a workqueue, shared with every other process): datagrams arriving
+                // right after the first socket asked for it may come without a timestamp.
+                REQUIRE(client.tx.push(asBytes("warm-up")));
+                client.tx.flush();
+                REQUIRE(pollUntil(reactor, [&] {
+                    if (!server.rx.empty() && server.rx.info().softwareTimestampNs == 0) {
+                        server.rx.consume();
+                        REQUIRE(client.tx.push(asBytes("warm-up")));
+                        client.tx.flush();
+                    }
+                    return !server.rx.empty();
+                }));
+                server.rx.consume();
+
                 REQUIRE(client.tx.push(asBytes("first")));
                 REQUIRE(client.tx.push(asBytes("second")));
                 client.tx.flush();

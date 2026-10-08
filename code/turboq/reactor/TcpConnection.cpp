@@ -251,6 +251,8 @@ void TcpCore::close() noexcept {
     case ConnectionState::Connecting: [[fallthrough]];
     case ConnectionState::Handshaking: this->beginClose(); break;
     case ConnectionState::Ready:
+        // Committed data goes out before close_notify / FIN (best effort, never blocks).
+        this->flushOnClose();
         if (tlsActive_) {
             if (tlsUserTx_) {
                 this->sendUserspaceCloseNotify();
@@ -857,21 +859,30 @@ void TcpCore::encryptPending() noexcept {
     }
 }
 
-void TcpCore::sendUserspaceCloseNotify() noexcept {
-    // Best effort: pending data, then close_notify, straight to the socket.
-    this->encryptPending();
-    ::ERR_clear_error();
-    ::SSL_shutdown(ssl_);
-    ::ERR_clear_error();
-    if (!sendInFlight_) {
-        auto const data = cipherTx_.readable();
-        if (!data.empty()) {
-            auto const rc = ::send(fd_, data.data(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
-            if (rc > 0) {
-                cipherTx_.consume(static_cast<std::size_t>(rc));
-            }
-        }
+void TcpCore::flushOnClose() noexcept {
+    // Not while an io_uring send is in flight: the rest of the stream belongs after it.
+    if (sendInFlight_) {
+        return;
     }
+    if (tlsUserTx_) {
+        this->encryptPending();
+    }
+    auto& wire = this->wireTx();
+    while (!wire.empty()) {
+        auto const data = wire.readable();
+        auto const rc = ::send(fd_, data.data(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (rc <= 0) {
+            break; // socket buffer full or broken: closing anyway
+        }
+        wire.consume(static_cast<std::size_t>(rc));
+    }
+}
+
+void TcpCore::sendUserspaceCloseNotify() noexcept {
+    ::ERR_clear_error();
+    ::SSL_shutdown(ssl_); // writes the alert to cipherTx_
+    ::ERR_clear_error();
+    this->flushOnClose();
 }
 
 void TcpCore::scheduleObserverNotify() noexcept {

@@ -349,6 +349,7 @@ private:
     void decryptPending() noexcept;
     void encryptPending() noexcept;
     void sendUserspaceCloseNotify() noexcept;
+    void flushOnClose() noexcept;
     void scheduleObserverNotify() noexcept;
     [[nodiscard]] auto wireTx() noexcept -> MirroredBuffer& {
         return tlsUserTx_ ? cipherTx_ : txBuffer_;
@@ -417,8 +418,10 @@ public:
         return core_->connect();
     }
 
-    /// Start closing. The connection becomes Closed once all in-flight operations have completed
-    /// (observable after one of the next polls). Unread rx data stays available.
+    /// Start closing. Committed tx data is sent first as far as the socket takes it without
+    /// blocking (TLS: then close_notify). The connection becomes Closed once all in-flight
+    /// operations have completed (observable after one of the next polls). Unread rx data stays
+    /// available.
     void close() noexcept {
         core_->close();
     }
