@@ -180,9 +180,7 @@ public:
     };
 
 private:
-    friend class ::turboq::reactor::Reactor;
-
-    Reactor& reactor_;
+    Ring& ring_;
     std::unique_ptr<TcpCore> tcpCore_; // owned: lives and dies with this connection
     TcpCore& tcp_;
     WsOptions options_;
@@ -293,11 +291,11 @@ public:
     }
 
 private:
-    WsCore(Reactor& reactor, TcpCore* tcp, WsOptions options, WsUrl url);
+    WsCore(Ring& ring, TcpCore* tcp, WsOptions options, WsUrl url);
 
 public:
     /// Parse the URL, create the TCP layer. Throws std::system_error.
-    [[nodiscard]] static auto create(Reactor& reactor, WsOptions options) -> WsCore*;
+    [[nodiscard]] static auto create(Ring& ring, WsOptions options) -> WsCore*;
 
 private:
     void onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -305,7 +303,7 @@ private:
 
     [[nodiscard]] auto retirable() const noexcept -> bool override {
         return (state_ == ConnectionState::Closed || state_ == ConnectionState::Idle) && inflight_ == 0 &&
-               tcp_.retirable();
+               static_cast<IoHandler const&>(tcp_).retirable();
     }
 
     void beginRetire() noexcept override {
@@ -327,7 +325,7 @@ private:
 
     /// Address of a stream position that is still in the TCP rx ring.
     [[nodiscard]] TURBOQ_FORCE_INLINE auto streamPointer(std::uint64_t position) const noexcept -> std::byte* {
-        return const_cast<std::byte*>(tcp_.rxBuffer_.readable().data()) + (position - streamHead_);
+        return const_cast<std::byte*>(tcp_.rx.fetch().data()) + (position - streamHead_);
     }
 
     void consumeFront() noexcept;

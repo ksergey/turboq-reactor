@@ -92,8 +92,8 @@ void makeWildcard(int family, std::uint16_t port, sockaddr_storage& address, soc
 
 namespace detail {
 
-UdpCore::UdpCore(Reactor& reactor, UdpOptions options, std::uint16_t bufferGroupId)
-    : reactor_{reactor}, options_{std::move(options)}, bufferGroupId_{bufferGroupId},
+UdpCore::UdpCore(Ring& ring, UdpOptions options, std::uint16_t bufferGroupId)
+    : ring_{ring}, options_{std::move(options)}, bufferGroupId_{bufferGroupId},
       bufferCount_{upperPow2(std::clamp(options_.bufferCount, 1u, kMaxBufferCount))} {
     if (options_.maxDatagramSize == 0 || options_.maxDatagramSize > 65535 || options_.txBufferSize == 0 ||
         options_.txQueueDepth == 0) {
@@ -132,7 +132,7 @@ UdpCore::UdpCore(Reactor& reactor, UdpOptions options, std::uint16_t bufferGroup
     reg.ring_addr = reinterpret_cast<std::uint64_t>(bufferRing_);
     reg.ring_entries = bufferCount_;
     reg.bgid = bufferGroupId_;
-    if (int const rc = ::io_uring_register_buf_ring(&reactor_.ring_, &reg, 0); rc < 0) {
+    if (int const rc = ::io_uring_register_buf_ring(ring_.native(), &reg, 0); rc < 0) {
         throw std::system_error{makePosixErrorCode(-rc), "io_uring_register_buf_ring"};
     }
     auto const mask = ::io_uring_buf_ring_mask(bufferCount_);
@@ -143,19 +143,19 @@ UdpCore::UdpCore(Reactor& reactor, UdpOptions options, std::uint16_t bufferGroup
     ::io_uring_buf_ring_advance(bufferRing_, static_cast<int>(bufferCount_));
 }
 
-auto UdpCore::create(Reactor& reactor, UdpOptions options) -> UdpCore* {
-    auto const bufferGroupId = reactor.allocateBufferGroup();
+auto UdpCore::create(Ring& ring, UdpOptions options) -> UdpCore* {
+    auto const bufferGroupId = ring.allocateBufferGroup();
     try {
-        return new UdpCore{reactor, std::move(options), bufferGroupId};
+        return new UdpCore{ring, std::move(options), bufferGroupId};
     } catch (...) {
-        reactor.releaseBufferGroup(bufferGroupId);
+        ring.releaseBufferGroup(bufferGroupId);
         throw;
     }
 }
 
 void UdpCore::onRetired() noexcept {
-    ::io_uring_unregister_buf_ring(&reactor_.ring_, bufferGroupId_);
-    reactor_.releaseBufferGroup(bufferGroupId_);
+    ::io_uring_unregister_buf_ring(ring_.native(), bufferGroupId_);
+    ring_.releaseBufferGroup(bufferGroupId_);
 }
 
 UdpCore::~UdpCore() noexcept {
@@ -432,7 +432,7 @@ void UdpCore::onDatagram(std::int32_t res, std::uint32_t flags) noexcept {
     entry.payload = {static_cast<std::byte const*>(::io_uring_recvmsg_payload(out, &recvTemplate_)),
         ::io_uring_recvmsg_payload_length(out, res, &recvTemplate_)};
     entry.info = DatagramInfo{};
-    entry.info.receiveTimeNs = reactor_.now();
+    entry.info.receiveTimeNs = ring_.now();
     entry.info.truncated = (out->flags & MSG_TRUNC) != 0;
     if (out->namelen > 0) {
         entry.info.source = static_cast<sockaddr const*>(::io_uring_recvmsg_name(out));
@@ -489,7 +489,7 @@ void UdpCore::beginClose() noexcept {
         return;
     }
     // shutdown() does not wake up operations on a UDP socket: cancel them.
-    if (auto* sqe = reactor_.getSqe(); sqe) {
+    if (auto* sqe = ring_.getSqe(); sqe) {
         ::io_uring_prep_cancel_fd(sqe, fd_, IORING_ASYNC_CANCEL_ALL);
         ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Cancel));
         ++inflight_;
@@ -514,7 +514,7 @@ void UdpCore::armRecv() noexcept {
     }
     rxStalled_ = false;
 
-    auto* sqe = reactor_.getSqe();
+    auto* sqe = ring_.getSqe();
     if (!sqe) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
@@ -535,8 +535,7 @@ void UdpCore::resumeRecv() noexcept {
 
 void UdpCore::markTxDirty() noexcept {
     if (state_ == ConnectionState::Ready) {
-        txDirty_ = true;
-        reactor_.pendingTx_.push_back(this);
+        ring_.schedule(this);
     }
 }
 
@@ -552,7 +551,7 @@ void UdpCore::flushTx() noexcept {
         this->sendDirect();
     } else {
         this->startSend();
-        reactor_.submitNoThrow();
+        ring_.submitNoThrow();
     }
 }
 
@@ -569,7 +568,7 @@ void UdpCore::sendDirect() noexcept {
         } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
             // Socket send buffer is full: io_uring waits for room.
             this->startSend();
-            reactor_.submitNoThrow();
+            ring_.submitNoThrow();
             return;
         } else {
             this->dropDatagram(errno);
@@ -581,7 +580,7 @@ void UdpCore::startSend() noexcept {
     if (state_ != ConnectionState::Ready || sendInFlight_ || txHead_ == txTail_) {
         return;
     }
-    auto* sqe = reactor_.getSqe();
+    auto* sqe = ring_.getSqe();
     if (!sqe) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
@@ -614,8 +613,8 @@ void UdpCore::dropDatagram(int error) noexcept {
 } // namespace detail
 
 UdpConnection::UdpConnection(Reactor& reactor, UdpOptions options)
-    : core_{detail::UdpCore::create(reactor, std::move(options))}, rx{core_->rx}, tx{core_->tx} {
-    detail::attachCore(reactor, core_);
+    : core_{detail::UdpCore::create(reactor.ring(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
+    reactor.ring().attach(core_);
 }
 
 } // namespace turboq::reactor

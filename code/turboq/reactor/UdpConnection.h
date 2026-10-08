@@ -240,9 +240,7 @@ public:
     };
 
 private:
-    friend class ::turboq::reactor::Reactor;
-
-    Reactor& reactor_;
+    Ring& ring_;
     UdpOptions options_;
 
     int fd_{-1};
@@ -322,11 +320,11 @@ public:
     }
 
 private:
-    UdpCore(Reactor& reactor, UdpOptions options, std::uint16_t bufferGroupId);
+    UdpCore(Ring& ring, UdpOptions options, std::uint16_t bufferGroupId);
 
 public:
     /// Validate options, allocate buffers, register the buffer ring. Throws std::system_error.
-    [[nodiscard]] static auto create(Reactor& reactor, UdpOptions options) -> UdpCore*;
+    [[nodiscard]] static auto create(Ring& ring, UdpOptions options) -> UdpCore*;
 
 private:
     void onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;

@@ -63,29 +63,29 @@ constexpr std::uint16_t kCloseMessageTooBig = 1009;
 
 namespace detail {
 
-auto WsCore::create(Reactor& reactor, WsOptions options) -> WsCore* {
+auto WsCore::create(Ring& ring, WsOptions options) -> WsCore* {
     auto url = parseWsUrl(options.url);
     if (!url) {
         throw std::system_error{url.error(), "WsCore"};
     }
     TlsOptions tls = options.tls;
     tls.enabled = url->secure;
-    std::unique_ptr<TcpCore> tcp{TcpCore::create(reactor, {.host = url->host,
-                                                              .port = url->port,
-                                                              .rxBufferSize = options.rxBufferSize,
-                                                              .txBufferSize = options.txBufferSize,
-                                                              .connectTimeout = options.connectTimeout,
-                                                              .noDelay = options.noDelay,
-                                                              .directSend = options.directSend,
-                                                              .tls = std::move(tls)})};
-    auto* conn = new WsCore{reactor, tcp.get(), std::move(options), std::move(*url)};
+    std::unique_ptr<TcpCore> tcp{TcpCore::create(ring, {.host = url->host,
+                                                           .port = url->port,
+                                                           .rxBufferSize = options.rxBufferSize,
+                                                           .txBufferSize = options.txBufferSize,
+                                                           .connectTimeout = options.connectTimeout,
+                                                           .noDelay = options.noDelay,
+                                                           .directSend = options.directSend,
+                                                           .tls = std::move(tls)})};
+    auto* conn = new WsCore{ring, tcp.get(), std::move(options), std::move(*url)};
     tcp.release(); // owned by conn now
     return conn;
 }
 
-WsCore::WsCore(Reactor& reactor, TcpCore* tcp, WsOptions options, WsUrl url)
-    : reactor_{reactor}, tcpCore_{tcp}, tcp_{*tcp}, options_{std::move(options)}, url_{std::move(url)} {
-    tcp_.observer_ = this;
+WsCore::WsCore(Ring& ring, TcpCore* tcp, WsOptions options, WsUrl url)
+    : ring_{ring}, tcpCore_{tcp}, tcp_{*tcp}, options_{std::move(options)}, url_{std::move(url)} {
+    tcp_.setObserver(this);
     entries_.resize(upperPow2(std::max<std::size_t>(options_.maxQueuedMessages, 1)));
     entriesMask_ = entries_.size() - 1;
     maxMessageSize_ = options_.maxMessageSize != 0 ? options_.maxMessageSize : tcp_.rx.capacity();
@@ -576,7 +576,7 @@ void WsCore::armTimeout() noexcept {
     timeout_.tv_sec = seconds.count();
     timeout_.tv_nsec =
         std::chrono::duration_cast<std::chrono::nanoseconds>(options_.handshakeTimeout - seconds).count();
-    auto* sqe = reactor_.getSqe();
+    auto* sqe = ring_.getSqe();
     if (!sqe) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull), 0);
         return;
@@ -591,7 +591,7 @@ void WsCore::disarmTimeout() noexcept {
     if (!timeoutArmed_) {
         return;
     }
-    if (auto* sqe = reactor_.getSqe(); sqe) {
+    if (auto* sqe = ring_.getSqe(); sqe) {
         ::io_uring_prep_timeout_remove(sqe, detail::encodeUserData(this, detail::OpCode::ConnectTimeout), 0);
         ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Cancel));
         ++inflight_;
@@ -602,8 +602,8 @@ void WsCore::disarmTimeout() noexcept {
 } // namespace detail
 
 WsConnection::WsConnection(Reactor& reactor, WsOptions options)
-    : core_{detail::WsCore::create(reactor, std::move(options))}, rx{core_->rx}, tx{core_->tx} {
-    detail::attachCore(reactor, core_);
+    : core_{detail::WsCore::create(reactor.ring(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
+    reactor.ring().attach(core_);
 }
 
 } // namespace turboq::reactor

@@ -132,7 +132,7 @@ constexpr unsigned char kAlertCloseNotify = 0;
 
 namespace detail {
 
-auto TcpCore::create(Reactor& reactor, TcpOptions options) -> TcpCore* {
+auto TcpCore::create(Ring& ring, TcpOptions options) -> TcpCore* {
     if (options.host.empty() || options.port == 0 || options.rxBufferSize == 0 || options.txBufferSize == 0) {
         throw std::system_error{makeErrorCode(Error::InvalidOptions), "TcpConnection"};
     }
@@ -155,14 +155,14 @@ auto TcpCore::create(Reactor& reactor, TcpOptions options) -> TcpCore* {
         cipherRx = std::move(*rx);
         cipherTx = std::move(*tx);
     }
-    auto* core = new TcpCore{reactor, std::move(options), std::move(*rxBuffer), std::move(*txBuffer)};
+    auto* core = new TcpCore{ring, std::move(options), std::move(*rxBuffer), std::move(*txBuffer)};
     core->cipherRx_ = std::move(cipherRx);
     core->cipherTx_ = std::move(cipherTx);
     return core;
 }
 
-TcpCore::TcpCore(Reactor& reactor, TcpOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept
-    : reactor_{reactor}, options_{std::move(options)}, rxBuffer_{std::move(rxBuffer)}, txBuffer_{std::move(txBuffer)} {
+TcpCore::TcpCore(Ring& ring, TcpOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept
+    : ring_{ring}, options_{std::move(options)}, rxBuffer_{std::move(rxBuffer)}, txBuffer_{std::move(txBuffer)} {
     auto const seconds = std::chrono::duration_cast<std::chrono::seconds>(options_.connectTimeout);
     connectTimeout_.tv_sec = seconds.count();
     connectTimeout_.tv_nsec =
@@ -227,16 +227,16 @@ auto TcpCore::connect() -> std::expected<void, std::error_code> {
     }
 
     // connect + linked timeout must land in the same submission: reserve both SQEs up front.
-    if (!reactor_.ensureSqSpace(2)) {
+    if (!ring_.ensureSqSpace(2)) {
         return this->failSync(makeErrorCode(Error::SubmissionQueueFull));
     }
 
-    auto* sqe = reactor_.getSqe();
+    auto* sqe = ring_.getSqe();
     ::io_uring_prep_connect(sqe, fd_, reinterpret_cast<sockaddr const*>(&address_), addressLength_);
     sqe->flags |= IOSQE_IO_LINK;
     ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Connect));
 
-    auto* timeoutSqe = reactor_.getSqe();
+    auto* timeoutSqe = ring_.getSqe();
     ::io_uring_prep_link_timeout(timeoutSqe, &connectTimeout_, 0);
     ::io_uring_sqe_set_data64(timeoutSqe, detail::encodeUserData(this, detail::OpCode::ConnectTimeout));
 
@@ -318,7 +318,7 @@ void TcpCore::onCompletion(detail::OpCode op, std::int32_t res, [[maybe_unused]]
             // Userspace TLS: ciphertext lands in cipherRx_, OpenSSL decrypts into rxBuffer_.
             if (res > 0) [[likely]] {
                 cipherRx_.produce(static_cast<std::size_t>(res));
-                rxTimestamp_ = reactor_.now();
+                rxTimestamp_ = ring_.now();
                 auto const before = rxBuffer_.size();
                 this->decryptPending();
                 if (state_ == ConnectionState::Ready) {
@@ -363,7 +363,7 @@ void TcpCore::onCompletion(detail::OpCode op, std::int32_t res, [[maybe_unused]]
         }
         if (res > 0) [[likely]] {
             rxBuffer_.produce(static_cast<std::size_t>(res));
-            rxTimestamp_ = reactor_.now();
+            rxTimestamp_ = ring_.now();
             if (state_ == ConnectionState::Ready) {
                 this->armRecv();
             }
@@ -438,7 +438,7 @@ void TcpCore::beginClose() noexcept {
         return;
     }
     // Covers what shutdown() does not wake up, e.g. a connect in progress.
-    if (auto* sqe = reactor_.getSqe(); sqe) {
+    if (auto* sqe = ring_.getSqe(); sqe) {
         ::io_uring_prep_cancel_fd(sqe, fd_, IORING_ASYNC_CANCEL_ALL);
         ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::Cancel));
         ++inflight_;
@@ -477,7 +477,7 @@ void TcpCore::armRecv() noexcept {
         rxStalled_ = false;
     }
 
-    auto* sqe = reactor_.getSqe();
+    auto* sqe = ring_.getSqe();
     if (!sqe) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
@@ -618,22 +618,22 @@ void TcpCore::armHandshakePoll(unsigned events) noexcept {
     handshakeTimeout_.tv_sec = seconds.count();
     handshakeTimeout_.tv_nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(remaining - seconds).count();
 
-    if (!reactor_.ensureSqSpace(2)) {
+    if (!ring_.ensureSqSpace(2)) {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
     }
-    auto* sqe = reactor_.getSqe();
+    auto* sqe = ring_.getSqe();
     ::io_uring_prep_poll_add(sqe, fd_, events);
     sqe->flags |= IOSQE_IO_LINK;
     ::io_uring_sqe_set_data64(sqe, detail::encodeUserData(this, detail::OpCode::HandshakePoll));
 
-    auto* timeoutSqe = reactor_.getSqe();
+    auto* timeoutSqe = ring_.getSqe();
     ::io_uring_prep_link_timeout(timeoutSqe, &handshakeTimeout_, 0);
     ::io_uring_sqe_set_data64(timeoutSqe, detail::encodeUserData(this, detail::OpCode::ConnectTimeout));
 
     inflight_ += 2;
     // Handshake round trips are on the connection's critical path: don't wait for the next poll.
-    reactor_.submitNoThrow();
+    ring_.submitNoThrow();
 }
 
 void TcpCore::completeHandshake() noexcept {
@@ -877,8 +877,7 @@ void TcpCore::sendUserspaceCloseNotify() noexcept {
 void TcpCore::scheduleObserverNotify() noexcept {
     observerPending_ = true;
     if (!txDirty_) {
-        txDirty_ = true;
-        reactor_.pendingTx_.push_back(this); // onTxReady() delivers it in the next poll()
+        ring_.schedule(this); // onTxReady() delivers it in the next poll()
     }
 }
 
@@ -966,8 +965,7 @@ void TcpCore::onKeylog(ssl_st const* ssl, char const* line) noexcept {
 void TcpCore::markTxDirty() noexcept {
     // While connecting the connect completion starts sending; once closing nothing is sent.
     if (state_ == ConnectionState::Ready) {
-        txDirty_ = true;
-        reactor_.pendingTx_.push_back(this);
+        ring_.schedule(this);
     }
 }
 
@@ -987,7 +985,7 @@ void TcpCore::flushTx() noexcept {
         return;
     }
     if (!observerPending_) {
-        // A stale entry may remain in Reactor::pendingTx_, it is skipped there. With an observer
+        // A stale entry may remain in the ring's pending-tx list, it is skipped there. With an observer
         // notification pending, the entry must stay live: poll() delivers it.
         txDirty_ = false;
     }
@@ -998,7 +996,7 @@ void TcpCore::flushTx() noexcept {
         this->sendDirect();
     } else {
         this->startSend();
-        reactor_.submitNoThrow();
+        ring_.submitNoThrow();
     }
 }
 
@@ -1016,7 +1014,7 @@ void TcpCore::startSend() noexcept {
     if (wire.empty()) {
         return;
     }
-    auto* sqe = reactor_.getSqe();
+    auto* sqe = ring_.getSqe();
     if (!sqe) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
@@ -1052,15 +1050,15 @@ void TcpCore::sendDirect() noexcept {
     if (!wire.empty() || !txBuffer_.empty()) {
         // Socket buffer is full: hand the rest to io_uring, it waits for writability.
         this->startSend();
-        reactor_.submitNoThrow();
+        ring_.submitNoThrow();
     }
 }
 
 } // namespace detail
 
 TcpConnection::TcpConnection(Reactor& reactor, TcpOptions options)
-    : core_{detail::TcpCore::create(reactor, std::move(options))}, rx{core_->rx}, tx{core_->tx} {
-    detail::attachCore(reactor, core_);
+    : core_{detail::TcpCore::create(reactor.ring(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
+    reactor.ring().attach(core_);
 }
 
 } // namespace turboq::reactor

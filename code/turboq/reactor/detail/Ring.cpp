@@ -1,16 +1,16 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
-#include "Reactor.h"
+#include "Ring.h"
 
 #include <time.h>
 
 #include <limits>
 #include <system_error>
 
-#include "Error.h"
+#include "../Error.h"
 
-namespace turboq::reactor {
+namespace turboq::reactor::detail {
 namespace {
 
 [[nodiscard]] auto realtimeNs() noexcept -> std::uint64_t {
@@ -25,7 +25,7 @@ namespace {
 
 } // namespace
 
-Reactor::Reactor(ReactorOptions const& options) {
+Ring::Ring(ReactorOptions const& options) {
     if (options.sqEntries == 0 || (options.sqPoll && options.taskRunMode == TaskRunMode::Deferred)) {
         throw std::system_error{makeErrorCode(Error::InvalidOptions), "Reactor"};
     }
@@ -65,7 +65,7 @@ Reactor::Reactor(ReactorOptions const& options) {
     needsEnter_ = options.taskRunMode != TaskRunMode::Interrupt;
 }
 
-Reactor::~Reactor() noexcept {
+Ring::~Ring() noexcept {
     // Tear down the ring first: this cancels and waits for everything in flight, so the kernel
     // references no connection memory afterwards.
     ::io_uring_queue_exit(&ring_);
@@ -80,14 +80,14 @@ Reactor::~Reactor() noexcept {
     }
 }
 
-void Reactor::enable() {
+void Ring::enable() {
     if (int const rc = ::io_uring_enable_rings(&ring_); rc < 0) {
         throw std::system_error{makePosixErrorCode(-rc), "io_uring_enable_rings"};
     }
     enabled_ = true;
 }
 
-auto Reactor::poll() -> std::size_t {
+auto Ring::poll() -> std::size_t {
     if (!enabled_) [[unlikely]] {
         this->enable();
     }
@@ -105,7 +105,7 @@ auto Reactor::poll() -> std::size_t {
     return count;
 }
 
-auto Reactor::wait(std::chrono::nanoseconds timeout) -> std::size_t {
+auto Ring::wait(std::chrono::nanoseconds timeout) -> std::size_t {
     if (!enabled_) [[unlikely]] {
         this->enable();
     }
@@ -131,7 +131,7 @@ auto Reactor::wait(std::chrono::nanoseconds timeout) -> std::size_t {
     return count;
 }
 
-void Reactor::submit() {
+void Ring::submit() {
     if (!enabled_) [[unlikely]] {
         // Nothing can be submitted before the owning thread enables the ring; the queued SQEs go
         // out with the first poll().
@@ -140,7 +140,7 @@ void Reactor::submit() {
     this->submitInternal(false);
 }
 
-void Reactor::submitInternal(bool getEvents) {
+void Ring::submitInternal(bool getEvents) {
     int rc = 0;
     if (getEvents) {
         rc = ::io_uring_submit_and_get_events(&ring_);
@@ -152,7 +152,7 @@ void Reactor::submitInternal(bool getEvents) {
     }
 }
 
-auto Reactor::reap() noexcept -> std::size_t {
+auto Ring::reap() noexcept -> std::size_t {
     unsigned head;
     io_uring_cqe* cqe;
     std::size_t count = 0;
@@ -161,13 +161,13 @@ auto Reactor::reap() noexcept -> std::size_t {
         if (cqe->user_data == 0 || cqe->user_data == LIBURING_UDATA_TIMEOUT) [[unlikely]] {
             continue;
         }
-        detail::decodeHandler(cqe->user_data)->onCompletion(detail::decodeOpCode(cqe->user_data), cqe->res, cqe->flags);
+        decodeHandler(cqe->user_data)->onCompletion(decodeOpCode(cqe->user_data), cqe->res, cqe->flags);
     }
     ::io_uring_cq_advance(&ring_, static_cast<unsigned>(count));
     return count;
 }
 
-void Reactor::flushPendingTx() noexcept {
+void Ring::flushPendingTx() noexcept {
     if (pendingTx_.empty()) {
         return;
     }
@@ -180,7 +180,7 @@ void Reactor::flushPendingTx() noexcept {
     pendingTx_.clear();
 }
 
-auto Reactor::getSqe() noexcept -> io_uring_sqe* {
+auto Ring::getSqe() noexcept -> io_uring_sqe* {
     auto* sqe = ::io_uring_get_sqe(&ring_);
     if (!sqe && enabled_) [[unlikely]] {
         ::io_uring_submit(&ring_);
@@ -189,7 +189,7 @@ auto Reactor::getSqe() noexcept -> io_uring_sqe* {
     return sqe;
 }
 
-auto Reactor::ensureSqSpace(unsigned count) noexcept -> bool {
+auto Ring::ensureSqSpace(unsigned count) noexcept -> bool {
     if (::io_uring_sq_space_left(&ring_) >= count) {
         return true;
     }
@@ -199,7 +199,7 @@ auto Reactor::ensureSqSpace(unsigned count) noexcept -> bool {
     return ::io_uring_sq_space_left(&ring_) >= count;
 }
 
-void Reactor::attach(detail::IoHandler* core) noexcept {
+void Ring::attach(IoHandler* core) noexcept {
     core->owner_ = this;
     core->livePrev_ = nullptr;
     core->liveNext_ = live_;
@@ -209,7 +209,7 @@ void Reactor::attach(detail::IoHandler* core) noexcept {
     live_ = core;
 }
 
-void Reactor::retire(detail::IoHandler* core) noexcept {
+void Ring::retire(IoHandler* core) noexcept {
     if (core->livePrev_) {
         core->livePrev_->liveNext_ = core->liveNext_;
     } else {
@@ -231,11 +231,11 @@ void Reactor::retire(detail::IoHandler* core) noexcept {
     }
 }
 
-void Reactor::collectRetired() noexcept {
+void Ring::collectRetired() noexcept {
     if (retired_.empty()) [[likely]] {
         return;
     }
-    std::erase_if(retired_, [this](detail::IoHandler* core) {
+    std::erase_if(retired_, [this](IoHandler* core) {
         if (!core->retirable()) {
             return false;
         }
@@ -246,7 +246,7 @@ void Reactor::collectRetired() noexcept {
     });
 }
 
-auto Reactor::allocateBufferGroup() -> std::uint16_t {
+auto Ring::allocateBufferGroup() -> std::uint16_t {
     if (!freeBufferGroups_.empty()) {
         auto const id = freeBufferGroups_.back();
         freeBufferGroups_.pop_back();
@@ -258,14 +258,8 @@ auto Reactor::allocateBufferGroup() -> std::uint16_t {
     return nextBufferGroupId_++;
 }
 
-void Reactor::releaseBufferGroup(std::uint16_t id) noexcept {
+void Ring::releaseBufferGroup(std::uint16_t id) noexcept {
     freeBufferGroups_.push_back(id);
-}
-
-namespace detail {
-
-void attachCore(Reactor& reactor, IoHandler* core) noexcept {
-    reactor.attach(core);
 }
 
 void releaseCore(IoHandler* core) noexcept {
@@ -280,6 +274,4 @@ void releaseCore(IoHandler* core) noexcept {
     core->owner_->retire(core);
 }
 
-} // namespace detail
-
-} // namespace turboq::reactor
+} // namespace turboq::reactor::detail

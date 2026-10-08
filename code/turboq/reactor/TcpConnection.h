@@ -201,10 +201,7 @@ public:
     };
 
 private:
-    friend class ::turboq::reactor::Reactor;
-    friend class WsCore;
-
-    Reactor& reactor_;
+    Ring& ring_;
     TcpOptions options_;
     detail::StreamObserver* observer_{nullptr};
     MirroredBuffer rxBuffer_;
@@ -258,7 +255,7 @@ public:
     ~TcpCore() noexcept override;
 
     /// Validate options, allocate the rings. Throws std::system_error.
-    [[nodiscard]] static auto create(Reactor& reactor, TcpOptions options) -> TcpCore*;
+    [[nodiscard]] static auto create(Ring& ring, TcpOptions options) -> TcpCore*;
 
     /// Start connecting. Allowed in Idle and Closed states (i.e. this is also "reconnect").
     /// Clears both queues. Synchronous failures (resolution, socket()) are returned and also leave
@@ -292,6 +289,12 @@ public:
         return tlsCipher_;
     }
 
+    /// Layering hook (WebSocket): notified about readiness, data and close from inside the
+    /// reactor's completion processing.
+    void setObserver(StreamObserver* observer) noexcept {
+        observer_ = observer;
+    }
+
     [[nodiscard]] auto kernelTlsOffload() const noexcept -> KernelTlsOffload {
         if (!tlsActive_) {
             return KernelTlsOffload::None;
@@ -309,7 +312,7 @@ public:
     }
 
 private:
-    TcpCore(Reactor& reactor, TcpOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept;
+    TcpCore(Ring& ring, TcpOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept;
 
     void onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
     void onTxReady() noexcept override;

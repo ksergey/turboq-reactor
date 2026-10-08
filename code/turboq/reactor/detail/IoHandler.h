@@ -8,11 +8,9 @@
 #include <cstdint>
 #include <vector>
 
-namespace turboq::reactor {
-class Reactor;
-}
-
 namespace turboq::reactor::detail {
+
+class Ring;
 
 /// Operation kind, stored in the low bits of an SQE's user_data.
 enum class OpCode : std::uint8_t {
@@ -32,11 +30,11 @@ enum class OpCode : std::uint8_t {
 /// without any further indirection.
 class IoHandler {
 public:
-    /// Set while the handler sits in Reactor's pending-tx list with committed data to send.
+    /// Set while the handler sits in the ring's pending-tx list (Ring::schedule()).
     bool txDirty_{false};
 
-    // Life cycle, managed by the reactor (see attachCore()/releaseCore()).
-    Reactor* owner_{nullptr};      // reactor tracking this handler, nullptr if not attached
+    // Life cycle, managed by the ring (see Ring::attach(), releaseCore()).
+    Ring* owner_{nullptr};         // ring tracking this handler, nullptr if not attached
     bool orphaned_{false};         // the reactor was destroyed first: the owning handle deletes us
     IoHandler* livePrev_{nullptr}; // intrusive list of attached, not yet released handlers
     IoHandler* liveNext_{nullptr};
@@ -64,9 +62,6 @@ public:
     /// Called from Reactor::poll()/wait() for handlers marked txDirty_: start sending committed data.
     virtual void onTxReady() noexcept = 0;
 };
-
-/// Start tracking a freshly created handler (connection handle constructor).
-void attachCore(Reactor& reactor, IoHandler* core) noexcept;
 
 /// Release a handler whose handle is gone: deleted right away if the kernel is done with it,
 /// otherwise closed and deleted by the reactor once its last completion arrived. Deleted directly
