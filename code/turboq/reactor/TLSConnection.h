@@ -115,7 +115,7 @@ public:
     ~TLSCore() noexcept override;
 
     /// Validate options, allocate the rings. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, TCPOptions tcp, TLSOptions tls) -> TLSCore*;
+    [[nodiscard]] static auto create(Backend& ring, TCPOptions tcp, TLSOptions tls) -> std::unique_ptr<TLSCore>;
 
     [[nodiscard]] auto tlsOptions() const noexcept -> TLSOptions const& {
         return tlsOptions_;
@@ -194,7 +194,7 @@ private:
 template <typename Backend>
 class TLSConnection {
 private:
-    detail::TLSCore<Backend>* core_;
+    detail::CorePtr<detail::TLSCore<Backend>> core_;
 
 public:
     typename detail::TCPCore<Backend>::Rx rx;
@@ -209,23 +209,12 @@ public:
 
     /// Moves the connection, in-flight operations included. The moved-from object may only be
     /// destroyed or assigned to.
-    TLSConnection(TLSConnection&& other) noexcept
-        : core_{std::exchange(other.core_, nullptr)}, rx{other.rx}, tx{other.tx} {}
+    TLSConnection(TLSConnection&& other) noexcept = default;
 
-    TLSConnection& operator=(TLSConnection&& other) noexcept {
-        if (this != &other) {
-            detail::releaseCore(core_);
-            core_ = std::exchange(other.core_, nullptr);
-            rx = other.rx;
-            tx = other.tx;
-        }
-        return *this;
-    }
+    TLSConnection& operator=(TLSConnection&& other) noexcept = default;
 
     /// Sends close_notify if Ready and closes. Never blocks (see TCPConnection::~TCPConnection()).
-    ~TLSConnection() noexcept {
-        detail::releaseCore(core_);
-    }
+    ~TLSConnection() noexcept = default;
 
     /// Connect and handshake: Connecting -> Handshaking -> Ready. Allowed in Idle and Closed states
     /// (i.e. this is also "reconnect"). Clears both queues.

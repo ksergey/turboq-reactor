@@ -35,6 +35,8 @@ namespace {
 
 using namespace turboq::reactor;
 
+constexpr char const* kDefaultBackend = TURBOQ_REACTOR_IO_URING ? "io_uring" : "epoll";
+
 using Clock = std::chrono::steady_clock;
 
 void pinToCpu(int cpu) {
@@ -49,6 +51,7 @@ void pinToCpu(int cpu) {
     }
 }
 
+#if TURBOQ_REACTOR_IO_URING
 [[nodiscard]] auto parseTaskRunMode(std::string const& value) -> TaskRunMode {
     if (value == "interrupt") {
         return TaskRunMode::Interrupt;
@@ -59,6 +62,7 @@ void pinToCpu(int cpu) {
     }
     throw std::invalid_argument{"unknown taskrun mode: " + value};
 }
+#endif
 
 void printReport(std::vector<std::chrono::nanoseconds>& samples) {
     if (samples.empty()) {
@@ -218,7 +222,7 @@ auto main(int argc, char** argv) -> int {
             ("s,size", "message size in bytes", cxxopts::value<std::size_t>()->default_value("64"))
             ("c,count", "measured round trips", cxxopts::value<std::uint64_t>()->default_value("100000"))
             ("w,warmup", "round trips before measuring", cxxopts::value<std::uint64_t>()->default_value("10000"))
-            ("backend", "[reactor] io_uring or epoll", cxxopts::value<std::string>()->default_value("io_uring"))
+            ("backend", "[reactor] io_uring (if built) or epoll", cxxopts::value<std::string>()->default_value(kDefaultBackend))
             ("taskrun", "[reactor/io_uring] interrupt, cooperative or deferred", cxxopts::value<std::string>()->default_value("deferred"))
             ("direct-send", "[reactor] synchronous send() in flush()", cxxopts::value<bool>()->default_value("true"))
             ("cpu", "pin to this CPU (-1 = no pinning)", cxxopts::value<int>()->default_value("-1"))
@@ -246,10 +250,14 @@ auto main(int argc, char** argv) -> int {
         } else if (role == "reactor") {
             auto const backend = args["backend"].as<std::string>();
             auto const directSend = args["direct-send"].as<bool>();
+#if TURBOQ_REACTOR_IO_URING
             if (backend == "io_uring") {
                 runReactorClient<IoUringBackend>(host, port, size, count, warmup,
                     {.taskRunMode = parseTaskRunMode(args["taskrun"].as<std::string>())}, directSend);
-            } else if (backend == "epoll") {
+                return 0;
+            }
+#endif
+            if (backend == "epoll") {
                 runReactorClient<EpollBackend>(host, port, size, count, warmup, {}, directSend);
             } else {
                 throw std::invalid_argument{"unknown backend: " + backend};

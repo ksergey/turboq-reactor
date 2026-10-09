@@ -64,7 +64,7 @@ constexpr std::uint16_t kCloseMessageTooBig = 1009;
 namespace detail {
 
 template <typename Backend>
-auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> WebsocketCore* {
+auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> std::unique_ptr<WebsocketCore> {
     auto url = parseWsUrl(options.url);
     if (!url) {
         throw std::system_error{url.error(), "WebsocketCore"};
@@ -83,20 +83,21 @@ auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> Websock
         if (!tlsOptions.serverName) {
             tlsOptions.serverName = url->host; // SNI + verification (by IP for a numeric host)
         }
-        tls = TLSCore<Backend>::create(ring, std::move(tcpOptions), std::move(tlsOptions));
-        tcp.reset(tls);
+        auto tlsCore = TLSCore<Backend>::create(ring, std::move(tcpOptions), std::move(tlsOptions));
+        tls = tlsCore.get();
+        tcp = std::move(tlsCore);
     } else {
-        tcp.reset(TCPCore<Backend>::create(ring, std::move(tcpOptions)));
+        tcp = TCPCore<Backend>::create(ring, std::move(tcpOptions));
     }
-    auto* conn = new WebsocketCore{ring, tcp.get(), tls, std::move(options), std::move(*url)};
-    tcp.release(); // owned by conn now
-    return conn;
+    return std::unique_ptr<WebsocketCore>{
+        new WebsocketCore{ring, std::move(tcp), tls, std::move(options), std::move(*url)}};
 }
 
 template <typename Backend>
 WebsocketCore<Backend>::WebsocketCore(
-    Backend& ring, TCPCore<Backend>* tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url)
-    : ring_{ring}, tcpCore_{tcp}, tcp_{*tcp}, tls_{tls}, options_{std::move(options)}, url_{std::move(url)} {
+    Backend& ring, std::unique_ptr<TCPCore<Backend>> tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url)
+    : ring_{ring}, tcpCore_{std::move(tcp)}, tcp_{*tcpCore_}, tls_{tls}, options_{std::move(options)},
+      url_{std::move(url)} {
     tcp_.setObserver(this);
     entries_.resize(upperPow2(std::max<std::size_t>(options_.maxQueuedMessages, 1)));
     entriesMask_ = entries_.size() - 1;
@@ -645,15 +646,19 @@ template <typename Backend>
 WebsocketConnection<Backend>::WebsocketConnection(Reactor<Backend>& reactor, WsOptions options)
     : core_{detail::WebsocketCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx},
       tx{core_->tx} {
-    reactor.backend().attach(core_);
+    reactor.backend().attach(core_.get());
 }
 
 // The backends this library is built with.
 namespace detail {
+#if TURBOQ_REACTOR_IO_URING
 template class WebsocketCore<IoUringBackend>;
+#endif
 template class WebsocketCore<EpollBackend>;
 } // namespace detail
+#if TURBOQ_REACTOR_IO_URING
 template class WebsocketConnection<IoUringBackend>;
+#endif
 template class WebsocketConnection<EpollBackend>;
 
 } // namespace turboq::reactor

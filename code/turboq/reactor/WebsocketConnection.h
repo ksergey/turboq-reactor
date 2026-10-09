@@ -294,11 +294,12 @@ public:
     }
 
 private:
-    WebsocketCore(Backend& ring, TCPCore<Backend>* tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url);
+    WebsocketCore(
+        Backend& ring, std::unique_ptr<TCPCore<Backend>> tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url);
 
 public:
     /// Parse the URL, create the TCP layer. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, WsOptions options) -> WebsocketCore*;
+    [[nodiscard]] static auto create(Backend& ring, WsOptions options) -> std::unique_ptr<WebsocketCore>;
 
 private:
     void onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -368,7 +369,7 @@ private:
 template <typename Backend>
 class WebsocketConnection {
 private:
-    detail::WebsocketCore<Backend>* core_;
+    detail::CorePtr<detail::WebsocketCore<Backend>> core_;
 
 public:
     typename detail::WebsocketCore<Backend>::Rx rx;
@@ -381,23 +382,12 @@ public:
     WebsocketConnection(WebsocketConnection const&) = delete;
     WebsocketConnection& operator=(WebsocketConnection const&) = delete;
 
-    WebsocketConnection(WebsocketConnection&& other) noexcept
-        : core_{std::exchange(other.core_, nullptr)}, rx{other.rx}, tx{other.tx} {}
+    WebsocketConnection(WebsocketConnection&& other) noexcept = default;
 
-    WebsocketConnection& operator=(WebsocketConnection&& other) noexcept {
-        if (this != &other) {
-            detail::releaseCore(core_);
-            core_ = std::exchange(other.core_, nullptr);
-            rx = other.rx;
-            tx = other.tx;
-        }
-        return *this;
-    }
+    WebsocketConnection& operator=(WebsocketConnection&& other) noexcept = default;
 
     /// Sends Close if Ready and closes. Never blocks (see TCPConnection::~TCPConnection()).
-    ~WebsocketConnection() noexcept {
-        detail::releaseCore(core_);
-    }
+    ~WebsocketConnection() noexcept = default;
 
     /// Connect: TCP, TLS (wss), HTTP upgrade. Allowed in Idle and Closed states. Drops messages
     /// still queued from the previous session.

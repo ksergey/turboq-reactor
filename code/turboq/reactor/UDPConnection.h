@@ -319,7 +319,7 @@ private:
 
 public:
     /// Validate options, allocate buffers, register the buffer ring. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, UDPOptions options) -> UDPCore*;
+    [[nodiscard]] static auto create(Backend& ring, UDPOptions options) -> std::unique_ptr<UDPCore>;
 
 private:
     void onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -379,7 +379,7 @@ private:
 template <typename Backend>
 class UDPConnection {
 private:
-    detail::UDPCore<Backend>* core_;
+    detail::CorePtr<detail::UDPCore<Backend>> core_;
 
 public:
     typename detail::UDPCore<Backend>::Rx rx;
@@ -394,23 +394,12 @@ public:
     UDPConnection(UDPConnection const&) = delete;
     UDPConnection& operator=(UDPConnection const&) = delete;
 
-    UDPConnection(UDPConnection&& other) noexcept
-        : core_{std::exchange(other.core_, nullptr)}, rx{other.rx}, tx{other.tx} {}
+    UDPConnection(UDPConnection&& other) noexcept = default;
 
-    UDPConnection& operator=(UDPConnection&& other) noexcept {
-        if (this != &other) {
-            detail::releaseCore(core_);
-            core_ = std::exchange(other.core_, nullptr);
-            rx = other.rx;
-            tx = other.tx;
-        }
-        return *this;
-    }
+    UDPConnection& operator=(UDPConnection&& other) noexcept = default;
 
     /// Closes the socket if needed. Never blocks (see TCPConnection::~TCPConnection()).
-    ~UDPConnection() noexcept {
-        detail::releaseCore(core_);
-    }
+    ~UDPConnection() noexcept = default;
 
     /// Create the socket, bind, join the group and start receiving. Synchronous: on success the
     /// connection is Ready, on failure Closed with error() set. Allowed in Idle and Closed states.

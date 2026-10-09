@@ -3,8 +3,6 @@
 
 #include "UDPConnection.h"
 
-#include <liburing.h> // io_uring_recvmsg_out: the layout of received datagrams (both backends)
-
 #include <linux/errqueue.h>
 #include <linux/net_tstamp.h>
 #include <net/if.h>
@@ -20,6 +18,7 @@
 
 #include "Error.h"
 #include "Reactor.h"
+#include "detail/RecvMsg.h"
 
 #ifndef IPV6_MULTICAST_ALL
 #define IPV6_MULTICAST_ALL 29 // linux/in6.h, missing from older libc headers
@@ -68,13 +67,13 @@ UDPCore<Backend>::UDPCore(Backend& ring, UDPOptions options)
         throw std::system_error{makeErrorCode(Error::InvalidOptions), "UDPCore"};
     }
 
-    // Every receive buffer holds io_uring_recvmsg_out + sender address + control messages + payload.
+    // Every receive buffer holds detail::RecvMsgOut + sender address + control messages + payload.
     // The kernel lays the buffer out as out-header | name | control | payload with no padding, so
     // the name size is rounded up to keep the cmsghdr array 8-byte aligned.
-    static_assert(sizeof(io_uring_recvmsg_out) % alignof(cmsghdr) == 0);
+    static_assert(sizeof(detail::RecvMsgOut) % alignof(cmsghdr) == 0);
     recvTemplate_.msg_namelen = alignUp<socklen_t>(sizeof(sockaddr_in6), alignof(cmsghdr));
     recvTemplate_.msg_controllen = CMSG_SPACE(sizeof(scm_timestamping)) + CMSG_SPACE(sizeof(std::uint32_t));
-    bufferLength_ = static_cast<unsigned>(sizeof(io_uring_recvmsg_out) + recvTemplate_.msg_namelen +
+    bufferLength_ = static_cast<unsigned>(sizeof(detail::RecvMsgOut) + recvTemplate_.msg_namelen +
                                           recvTemplate_.msg_controllen + options_.maxDatagramSize);
     bufferStride_ = alignUp<std::size_t>(bufferLength_, kCacheLineSize);
 
@@ -96,8 +95,8 @@ UDPCore<Backend>::UDPCore(Backend& ring, UDPOptions options)
 }
 
 template <typename Backend>
-auto UDPCore<Backend>::create(Backend& ring, UDPOptions options) -> UDPCore* {
-    return new UDPCore{ring, std::move(options)};
+auto UDPCore<Backend>::create(Backend& ring, UDPOptions options) -> std::unique_ptr<UDPCore> {
+    return std::unique_ptr<UDPCore>{new UDPCore{ring, std::move(options)}};
 }
 
 template <typename Backend>
@@ -362,7 +361,7 @@ void UDPCore<Backend>::onDatagram(std::int32_t res, std::uint32_t flags) noexcep
     auto const bufferId = static_cast<std::uint16_t>(flags >> detail::kCompletionBufferShift);
     auto* const buffer = buffers_.data() + std::size_t{bufferId} * bufferStride_;
 
-    auto* const out = ::io_uring_recvmsg_validate(buffer, res, &recvTemplate_);
+    auto* const out = detail::recvMsgValidate(buffer, res, recvTemplate_);
     if (!out) [[unlikely]] {
         this->recycle(bufferId);
         return;
@@ -371,19 +370,18 @@ void UDPCore<Backend>::onDatagram(std::int32_t res, std::uint32_t flags) noexcep
     assert(rxTail_ - rxHead_ < bufferCount_);
     auto& entry = rxEntries_[rxTail_ & (bufferCount_ - 1)];
     entry.bufferId = bufferId;
-    entry.payload = {static_cast<std::byte const*>(::io_uring_recvmsg_payload(out, &recvTemplate_)),
-        ::io_uring_recvmsg_payload_length(out, res, &recvTemplate_)};
+    entry.payload = {detail::recvMsgPayload(out, recvTemplate_), detail::recvMsgPayloadLength(out, res, recvTemplate_)};
     entry.info = DatagramInfo{};
     entry.info.receiveTime = ring_.now();
     entry.info.truncated = (out->flags & MSG_TRUNC) != 0;
     if (out->namelen > 0) {
-        entry.info.source = Endpoint::fromSockaddr(static_cast<sockaddr const*>(::io_uring_recvmsg_name(out)),
+        entry.info.source = Endpoint::fromSockaddr(std::bit_cast<sockaddr const*>(detail::recvMsgName(out)),
             std::min<socklen_t>(out->namelen, recvTemplate_.msg_namelen))
                                 .value_or(Endpoint{});
     }
 
-    for (auto* cmsg = ::io_uring_recvmsg_cmsg_firsthdr(out, &recvTemplate_); cmsg != nullptr;
-         cmsg = ::io_uring_recvmsg_cmsg_nexthdr(out, &recvTemplate_, cmsg)) {
+    for (auto* cmsg = detail::recvMsgFirstCmsg(out, recvTemplate_); cmsg != nullptr;
+         cmsg = detail::recvMsgNextCmsg(out, recvTemplate_, cmsg)) {
         if (cmsg->cmsg_level != SOL_SOCKET) {
             continue;
         }
@@ -562,15 +560,19 @@ void UDPCore<Backend>::dropDatagram(int error) noexcept {
 template <typename Backend>
 UDPConnection<Backend>::UDPConnection(Reactor<Backend>& reactor, UDPOptions options)
     : core_{detail::UDPCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
-    reactor.backend().attach(core_);
+    reactor.backend().attach(core_.get());
 }
 
 // The backends this library is built with.
 namespace detail {
+#if TURBOQ_REACTOR_IO_URING
 template class UDPCore<IoUringBackend>;
+#endif
 template class UDPCore<EpollBackend>;
 } // namespace detail
+#if TURBOQ_REACTOR_IO_URING
 template class UDPConnection<IoUringBackend>;
+#endif
 template class UDPConnection<EpollBackend>;
 
 } // namespace turboq::reactor

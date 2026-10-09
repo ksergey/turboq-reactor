@@ -10,7 +10,8 @@
 
 ## Requirements
 
-Linux 6.1+, a C++23 compiler (GCC 14+, Clang 20+), CMake 3.24+, liburing 2.5+, OpenSSL 3.0+.
+Linux 6.1+, a C++23 compiler (GCC 14+, Clang 20+), CMake 3.24+, OpenSSL 3.0+. liburing is
+fetched and built via CPM like the other dependencies.
 For kernel TLS: `sudo modprobe tls` (otherwise TLS runs in OpenSSL in userspace).
 
 ## Integration
@@ -25,6 +26,11 @@ CPMAddPackage(
 
 target_link_libraries(your_app PRIVATE turboq::reactor)
 ```
+
+The io_uring backend is controlled by `turboq_reactor_IO_URING`: `AUTO` (default, built when
+liburing is available), `ON` (required) or `OFF` (epoll only, no liburing at all; epoll becomes
+the default backend). `turboq_reactor_SYSTEM_LIBURING=ON` uses the system liburing (pkg-config)
+instead of building it.
 
 ## Example
 
@@ -58,8 +64,34 @@ int main() {
 `rx.fetch()` / `rx.consume()` to read, `tx.prepare()` / `tx.commit()` / `tx.flush()` to write.
 [`examples/binance_market_data.cpp`](examples/binance_market_data.cpp) adds reconnection with
 backoff, a liveness watchdog and graceful shutdown.
+[`examples/multicast_feeds.cpp`](examples/multicast_feeds.cpp) receives several multicast groups
+and prints each datagram with its NIC, kernel and user receive timestamps.
 
 The backend is a template parameter defaulting to io_uring. For epoll declare
 `Reactor<EpollBackend> reactor;` — connections deduce the backend from the reactor they are given
 (`TCPConnection conn{reactor, {...}}`); as class members write `TCPConnection<>` (io_uring) or
 `TCPConnection<EpollBackend>`.
+
+## AF_XDP
+
+`XDPConnection` takes raw Ethernet frames straight from a NIC receive queue, before the kernel
+network stack: a small built-in XDP program (no libbpf needed) hands UDP to the chosen ports to an
+AF_XDP socket, zero-copy where the driver supports it, everything else goes to the kernel as usual.
+
+```cpp
+Reactor reactor;
+XDPConnection feed{reactor, {.interface = "eth1", .queue = 3, .udpPorts = {5001},
+                             .groups = {IPv4Address{239, 1, 1, 1}}, .hardwareTimestamps = true}};
+feed.open();
+while (true) {
+    reactor.poll();
+    while (!feed.rx.empty()) {
+        handleFrame(feed.rx.fetch(), feed.rx.info().hardwareTimestamp); // Ethernet header included
+        feed.rx.consume();
+    }
+}
+```
+
+Needs root (CAP_NET_ADMIN + CAP_BPF) and the feeds steered to the queue
+(`ethtool -N eth1 flow-type udp4 dst-port 5001 action 3`). See
+[`examples/xdp_feeds.cpp`](examples/xdp_feeds.cpp).

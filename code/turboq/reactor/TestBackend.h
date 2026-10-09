@@ -3,8 +3,9 @@
 
 #pragma once
 
-// Tests of connections are built once per backend: TURBOQ_REACTOR_TEST_EPOLL selects epoll. The
-// aliases below shadow the io_uring defaults inside turboq::reactor::testing.
+// Tests of connections are built once per backend: TURBOQ_REACTOR_TEST_EPOLL selects epoll (and
+// so does a library built without io_uring). The aliases below shadow the defaults inside
+// turboq::reactor::testing.
 
 #include <cstdint>
 #include <vector>
@@ -13,7 +14,7 @@
 
 namespace turboq::reactor::testing {
 
-#if defined(TURBOQ_REACTOR_TEST_EPOLL)
+#if defined(TURBOQ_REACTOR_TEST_EPOLL) || !TURBOQ_REACTOR_IO_URING
 using TestBackend = EpollBackend;
 
 /// Every reactor configuration worth running a test against.
@@ -38,5 +39,6 @@ using TCPConnection = ::turboq::reactor::TCPConnection<TestBackend>;
 using TLSConnection = ::turboq::reactor::TLSConnection<TestBackend>;
 using UDPConnection = ::turboq::reactor::UDPConnection<TestBackend>;
 using WebsocketConnection = ::turboq::reactor::WebsocketConnection<TestBackend>;
+using XDPConnection = ::turboq::reactor::XDPConnection<TestBackend>;
 
 } // namespace turboq::reactor::testing

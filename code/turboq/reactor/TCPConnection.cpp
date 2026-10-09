@@ -44,11 +44,11 @@ auto TCPCore<Backend>::allocateRing(std::size_t size, char const* what) -> Mirro
 }
 
 template <typename Backend>
-auto TCPCore<Backend>::create(Backend& ring, TCPOptions options) -> TCPCore* {
+auto TCPCore<Backend>::create(Backend& ring, TCPOptions options) -> std::unique_ptr<TCPCore> {
     validate(options);
     auto rxBuffer = allocateRing(options.rxBufferSize, "MirroredBuffer::create (rx)");
     auto txBuffer = allocateRing(options.txBufferSize, "MirroredBuffer::create (tx)");
-    return new TCPCore{ring, std::move(options), std::move(rxBuffer), std::move(txBuffer)};
+    return std::unique_ptr<TCPCore>{new TCPCore{ring, std::move(options), std::move(rxBuffer), std::move(txBuffer)}};
 }
 
 template <typename Backend>
@@ -402,15 +402,19 @@ void TCPCore<Backend>::sendNow(MirroredBuffer& source) noexcept {
 template <typename Backend>
 TCPConnection<Backend>::TCPConnection(Reactor<Backend>& reactor, TCPOptions options)
     : core_{detail::TCPCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
-    reactor.backend().attach(core_);
+    reactor.backend().attach(core_.get());
 }
 
 // The backends this library is built with.
 namespace detail {
+#if TURBOQ_REACTOR_IO_URING
 template class TCPCore<IoUringBackend>;
+#endif
 template class TCPCore<EpollBackend>;
 } // namespace detail
+#if TURBOQ_REACTOR_IO_URING
 template class TCPConnection<IoUringBackend>;
+#endif
 template class TCPConnection<EpollBackend>;
 
 } // namespace turboq::reactor

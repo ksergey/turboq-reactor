@@ -3,6 +3,12 @@
 
 #pragma once
 
+#include <turboq/reactor/Config.h>
+
+#if !TURBOQ_REACTOR_IO_URING
+#error "turboq-reactor is built without the io_uring backend (turboq_reactor_IO_URING)"
+#endif
+
 #include <liburing.h>
 #include <linux/time_types.h>
 #include <sys/socket.h>
@@ -96,7 +102,8 @@ public:
     /// Connect, failing with -ECANCELED after `timeout`. OpCode::Connect.
     [[nodiscard]] auto connect(detail::IoHandler* handler, int fd, sockaddr const* address, socklen_t length,
         __kernel_timespec const* timeout) noexcept -> bool;
-    /// Wait for POLLIN / POLLOUT, failing with -ECANCELED after `timeout`. OpCode::Poll, res = revents.
+    /// Wait for POLLIN / POLLOUT, failing with -ECANCELED after `timeout` (nullptr: no time limit).
+    /// OpCode::Poll, res = revents.
     [[nodiscard]] auto pollFd(
         detail::IoHandler* handler, int fd, unsigned events, __kernel_timespec const* timeout) noexcept -> bool;
     /// OpCode::Recv, res = bytes (0: EOF).

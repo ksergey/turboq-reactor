@@ -8,12 +8,14 @@
 #include <unistd.h>
 
 #include <bit>
+#include <cstddef>
 #include <limits>
 #include <system_error>
 
 #include <turboq/Math.h>
 
 #include "Error.h"
+#include "detail/RecvMsg.h"
 
 namespace turboq::reactor {
 namespace {
@@ -25,6 +27,13 @@ using detail::OpCode;
 static_assert(detail::kCompletionBuffer == IORING_CQE_F_BUFFER);
 static_assert(detail::kCompletionMore == IORING_CQE_F_MORE);
 static_assert(detail::kCompletionBufferShift == IORING_CQE_BUFFER_SHIFT);
+
+// Multishot recvmsg buffers are parsed with detail::RecvMsgOut.
+static_assert(sizeof(detail::RecvMsgOut) == sizeof(io_uring_recvmsg_out));
+static_assert(offsetof(detail::RecvMsgOut, namelen) == offsetof(io_uring_recvmsg_out, namelen));
+static_assert(offsetof(detail::RecvMsgOut, controllen) == offsetof(io_uring_recvmsg_out, controllen));
+static_assert(offsetof(detail::RecvMsgOut, payloadlen) == offsetof(io_uring_recvmsg_out, payloadlen));
+static_assert(offsetof(detail::RecvMsgOut, flags) == offsetof(io_uring_recvmsg_out, flags));
 
 /// user_data of SQEs whose completion nobody waits for (linked timeouts, timeout removal): reap()
 /// skips it, so it may arrive after the handler is gone.
@@ -218,13 +227,16 @@ auto IoUringBackend::connect(IoHandler* handler, int fd, sockaddr const* address
 
 auto IoUringBackend::pollFd(
     IoHandler* handler, int fd, unsigned events, __kernel_timespec const* timeout) noexcept -> bool {
-    if (!this->ensureSqSpace(2)) {
+    if (!this->ensureSqSpace(timeout ? 2 : 1)) {
         return false;
     }
     auto* sqe = this->getSqe();
     ::io_uring_prep_poll_add(sqe, fd, events);
-    sqe->flags |= IOSQE_IO_LINK;
     ::io_uring_sqe_set_data64(sqe, encodeUserData(handler, OpCode::Poll));
+    if (!timeout) {
+        return true;
+    }
+    sqe->flags |= IOSQE_IO_LINK;
     auto* timeoutSqe = this->getSqe();
     ::io_uring_prep_link_timeout(timeoutSqe, const_cast<__kernel_timespec*>(timeout), 0);
     ::io_uring_sqe_set_data64(timeoutSqe, kIgnored);

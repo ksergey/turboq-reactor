@@ -4,7 +4,6 @@
 #include "EpollBackend.h"
 
 #include <fcntl.h>
-#include <liburing.h> // io_uring_recvmsg_out: datagrams are laid out the way io_uring does it
 #include <poll.h>
 #include <time.h>
 #include <unistd.h>
@@ -14,6 +13,7 @@
 #include <system_error>
 
 #include "Error.h"
+#include "detail/RecvMsg.h"
 
 namespace turboq::reactor {
 namespace {
@@ -232,7 +232,7 @@ auto EpollBackend::doRecv(int fd) noexcept -> std::size_t {
     }
 
     // Multishot: one completion per datagram, each in a buffer of the pool, laid out like
-    // io_uring does it: io_uring_recvmsg_out | name | control | payload.
+    // io_uring does it: detail::RecvMsgOut | name | control | payload.
     std::size_t count = 0;
     for (int i = 0; i < kMaxDatagramsPerEvent; ++i) {
         auto& cur = fds_[static_cast<std::size_t>(fd)];
@@ -250,12 +250,12 @@ auto EpollBackend::doRecv(int fd) noexcept -> std::size_t {
         }
         auto const id = pool.take();
         auto* const buffer = pool.buffer(id);
-        std::size_t const header = sizeof(io_uring_recvmsg_out) + layout->msg_namelen + layout->msg_controllen;
+        std::size_t const header = sizeof(detail::RecvMsgOut) + layout->msg_namelen + layout->msg_controllen;
         iovec iov{buffer + header, pool.length() - header};
         msghdr message{};
-        message.msg_name = buffer + sizeof(io_uring_recvmsg_out);
+        message.msg_name = buffer + sizeof(detail::RecvMsgOut);
         message.msg_namelen = layout->msg_namelen;
-        message.msg_control = buffer + sizeof(io_uring_recvmsg_out) + layout->msg_namelen;
+        message.msg_control = buffer + sizeof(detail::RecvMsgOut) + layout->msg_namelen;
         message.msg_controllen = layout->msg_controllen;
         message.msg_iov = &iov;
         message.msg_iovlen = 1;
@@ -272,7 +272,7 @@ auto EpollBackend::doRecv(int fd) noexcept -> std::size_t {
             handler->onCompletion(OpCode::Recv, -error, 0);
             return count + 1;
         }
-        io_uring_recvmsg_out out{};
+        detail::RecvMsgOut out{};
         out.namelen = message.msg_namelen;
         out.controllen = static_cast<unsigned>(message.msg_controllen);
         out.payloadlen = static_cast<unsigned>(rc);
@@ -332,6 +332,9 @@ void EpollBackend::attemptSends() noexcept {
 // Timers.
 
 void EpollBackend::addTimer(IoHandler* handler, OpCode op, int fd, __kernel_timespec const* timeout) {
+    if (!timeout) {
+        return; // no time limit
+    }
     timers_.push_back({std::chrono::steady_clock::now() + toDuration(timeout), handler, op, fd});
 }
 

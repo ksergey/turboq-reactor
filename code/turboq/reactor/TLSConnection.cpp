@@ -105,7 +105,7 @@ namespace detail {
 // Construction and life cycle.
 
 template <typename Backend>
-auto TLSCore<Backend>::create(Backend& ring, TCPOptions tcp, TLSOptions tls) -> TLSCore* {
+auto TLSCore<Backend>::create(Backend& ring, TCPOptions tcp, TLSOptions tls) -> std::unique_ptr<TLSCore> {
     validate(tcp);
     auto rxBuffer = allocateRing(tcp.rxBufferSize, "MirroredBuffer::create (rx)");
     auto txBuffer = allocateRing(tcp.txBufferSize, "MirroredBuffer::create (tx)");
@@ -115,8 +115,8 @@ auto TLSCore<Backend>::create(Backend& ring, TCPOptions tcp, TLSOptions tls) -> 
         cipherRx = allocateRing(std::max(tcp.rxBufferSize, kMinCipherRingSize), "MirroredBuffer::create (TLS rx)");
         cipherTx = allocateRing(std::max(tcp.txBufferSize, kMinCipherRingSize), "MirroredBuffer::create (TLS tx)");
     }
-    return new TLSCore{ring, std::move(tcp), std::move(tls), std::move(rxBuffer), std::move(txBuffer),
-        std::move(cipherRx), std::move(cipherTx)};
+    return std::unique_ptr<TLSCore>{new TLSCore{ring, std::move(tcp), std::move(tls), std::move(rxBuffer),
+        std::move(txBuffer), std::move(cipherRx), std::move(cipherTx)}};
 }
 
 template <typename Backend>
@@ -813,15 +813,19 @@ template <typename Backend>
 TLSConnection<Backend>::TLSConnection(Reactor<Backend>& reactor, TCPOptions tcp, TLSOptions tls)
     : core_{detail::TLSCore<Backend>::create(reactor.backend(), std::move(tcp), std::move(tls))}, rx{core_->rx},
       tx{core_->tx} {
-    reactor.backend().attach(core_);
+    reactor.backend().attach(core_.get());
 }
 
 // The backends this library is built with.
 namespace detail {
+#if TURBOQ_REACTOR_IO_URING
 template class TLSCore<IoUringBackend>;
+#endif
 template class TLSCore<EpollBackend>;
 } // namespace detail
+#if TURBOQ_REACTOR_IO_URING
 template class TLSConnection<IoUringBackend>;
+#endif
 template class TLSConnection<EpollBackend>;
 
 } // namespace turboq::reactor

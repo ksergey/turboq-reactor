@@ -20,11 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: install liburing, openssl, kernel tls
+      - name: install openssl, kernel tls
         shell: bash
         run: |
+          # liburing is built from source (CPM), see cmake/TurboQReactorLiburing.cmake
           sudo apt update
-          sudo apt install -y liburing-dev libssl-dev pkg-config
+          sudo apt install -y libssl-dev
           # kTLS tests skip themselves when the tls module is missing; load it so they run
           sudo modprobe tls || echo "tls kernel module is not available"
           cat /proc/sys/net/ipv4/tcp_available_ulp
@@ -198,6 +199,12 @@ jobs:
             message(FATAL_ERROR "Running tests failed!")
           endif()
 
+      - name: run AF_XDP tests as root
+        shell: bash
+        run: |
+          # unprivileged they skip themselves; as root they create a veth pair in a private netns
+          for test in build/code/*XDPConnection-test; do sudo --preserve-env "$test"; done
+
   sanitizers:
     name: ${{ matrix.sanitizer }} with ${{ matrix.compiler }}
     runs-on: ubuntu-24.04
@@ -213,11 +220,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: install liburing, openssl, kernel tls
+      - name: install openssl, kernel tls
         shell: bash
         run: |
+          # liburing is built from source (CPM), see cmake/TurboQReactorLiburing.cmake
           sudo apt update
-          sudo apt install -y liburing-dev libssl-dev pkg-config
+          sudo apt install -y libssl-dev
           # kTLS tests skip themselves when the tls module is missing; load it so they run
           sudo modprobe tls || echo "tls kernel module is not available"
           cat /proc/sys/net/ipv4/tcp_available_ulp
@@ -330,3 +338,52 @@ jobs:
           if (NOT result EQUAL 0)
             message(FATAL_ERROR "Running tests failed!")
           endif()
+
+      - name: run AF_XDP tests as root
+        shell: bash
+        run: |
+          # unprivileged they skip themselves; as root they create a veth pair in a private netns
+          for test in build/code/*XDPConnection-test; do sudo --preserve-env "$test"; done
+
+  # The other ways to get (or not get) the io_uring backend; one compiler is enough.
+  build-options:
+    name: ${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: 'epoll only (turboq_reactor_IO_URING=OFF)'
+            packages: ''
+            options: '-Dturboq_reactor_IO_URING=OFF'
+          - variant: 'system liburing (turboq_reactor_SYSTEM_LIBURING=ON)'
+            packages: 'liburing-dev pkg-config'
+            options: '-Dturboq_reactor_IO_URING=ON -Dturboq_reactor_SYSTEM_LIBURING=ON'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: install compiler and dependencies
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt install -y g++-14 gcc-14 ninja-build libssl-dev ${{ matrix.packages }}
+          sudo modprobe tls || echo "tls kernel module is not available"
+
+      - name: configure
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_BUILD_TYPE=Debug -Dturboq_reactor_WERROR=ON ${{ matrix.options }}
+
+      - name: build
+        shell: bash
+        run: cmake --build build
+
+      - name: run tests
+        shell: bash
+        run: ctest --test-dir build/code --output-on-failure -j $(nproc)
+
+      - name: run AF_XDP tests as root
+        run: for test in build/code/*XDPConnection-test; do sudo "$test"; done

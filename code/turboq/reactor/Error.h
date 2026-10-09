@@ -35,6 +35,9 @@ enum class Error {
     WsHandshakeTimeout,
     WsProtocolError,
     WsMessageTooBig,
+    XdpZeroCopyUnavailable,
+    XdpProgramRejected,
+    XdpProgramAttachFailed,
 };
 
 struct ErrorCategory final : public std::error_category {
@@ -71,6 +74,10 @@ struct ErrorCategory final : public std::error_category {
         case Error::WsHandshakeTimeout: return "WebSocket upgrade timeout";
         case Error::WsProtocolError: return "WebSocket protocol violation by the server";
         case Error::WsMessageTooBig: return "WebSocket message does not fit into the receive buffer";
+        case Error::XdpZeroCopyUnavailable: return "AF_XDP zero-copy is not supported by the driver of this interface";
+        case Error::XdpProgramRejected: return "the kernel rejected the XDP program (see XDPConnection::diagnostic())";
+        case Error::XdpProgramAttachFailed:
+            return "the XDP program could not be attached to the interface (see XDPConnection::diagnostic())";
         default: return "?";
         }
     }

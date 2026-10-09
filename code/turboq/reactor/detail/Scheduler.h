@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 #include "../Types.h"
@@ -15,9 +16,9 @@ namespace turboq::reactor::detail {
 /// of connection cores. Backends (IoUringBackend, EpollBackend) derive from it.
 class Scheduler {
 private:
-    std::vector<IoHandler*> pendingTx_; // handlers whose onTxReady() runs in the next poll()
-    IoHandler* live_{nullptr};          // connections whose handle exists (intrusive list)
-    std::vector<IoHandler*> retired_;   // handle gone, waiting for the backend to let go
+    std::vector<IoHandler*> pendingTx_;               // handlers whose onTxReady() runs in the next poll()
+    IoHandler* live_{nullptr};                        // connections whose handle exists (intrusive list)
+    std::vector<std::unique_ptr<IoHandler>> retired_; // handle gone, waiting for the backend to let go
 
 protected:
     Timestamp now_{};
@@ -51,7 +52,7 @@ public:
     void attach(IoHandler* core) noexcept;
 
     /// The core's handle is gone: close it and delete it once nothing is in flight.
-    void retire(IoHandler* core) noexcept;
+    void retire(std::unique_ptr<IoHandler> core) noexcept;
 
 protected:
     void flushPendingTx() noexcept;

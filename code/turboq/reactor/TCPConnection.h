@@ -198,7 +198,7 @@ public:
     ~TCPCore() noexcept override;
 
     /// Validate options, allocate the rings. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, TCPOptions options) -> TCPCore*;
+    [[nodiscard]] static auto create(Backend& ring, TCPOptions options) -> std::unique_ptr<TCPCore>;
 
     /// Start connecting. Allowed in Idle and Closed states (i.e. this is also "reconnect").
     /// Clears both queues. Synchronous failures (resolution, socket()) are returned and also leave
@@ -318,7 +318,7 @@ protected:
 template <typename Backend>
 class TCPConnection {
 private:
-    detail::TCPCore<Backend>* core_;
+    detail::CorePtr<detail::TCPCore<Backend>> core_;
 
 public:
     typename detail::TCPCore<Backend>::Rx rx;
@@ -333,24 +333,13 @@ public:
 
     /// Moves the connection, in-flight operations included. The moved-from object may only be
     /// destroyed or assigned to.
-    TCPConnection(TCPConnection&& other) noexcept
-        : core_{std::exchange(other.core_, nullptr)}, rx{other.rx}, tx{other.tx} {}
+    TCPConnection(TCPConnection&& other) noexcept = default;
 
-    TCPConnection& operator=(TCPConnection&& other) noexcept {
-        if (this != &other) {
-            detail::releaseCore(core_);
-            core_ = std::exchange(other.core_, nullptr);
-            rx = other.rx;
-            tx = other.tx;
-        }
-        return *this;
-    }
+    TCPConnection& operator=(TCPConnection&& other) noexcept = default;
 
     /// Closes the connection if needed. Never blocks: when operations are still in flight the
     /// reactor finishes them and frees the connection's memory in a later poll().
-    ~TCPConnection() noexcept {
-        detail::releaseCore(core_);
-    }
+    ~TCPConnection() noexcept = default;
 
     /// Start connecting. Allowed in Idle and Closed states (i.e. this is also "reconnect").
     /// Clears both queues. Synchronous failures (resolution, socket()) are returned and also leave

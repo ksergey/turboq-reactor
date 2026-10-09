@@ -8,16 +8,21 @@
 
 #include "EpollBackend.h"
 #include "Error.h"
+#if TURBOQ_REACTOR_IO_URING
 #include "IoUringBackend.h"
+#endif
 #include "TCPConnection.h"
 #include "TLSConnection.h"
 #include "UDPConnection.h"
 #include "WebsocketConnection.h"
+#include "XDPConnection.h"
 
 namespace turboq::reactor {
 
 /// Single-threaded event loop owning a set of connections, on top of a Backend chosen at compile
-/// time: IoUringBackend (the default) or EpollBackend.
+/// time: IoUringBackend (the default) or EpollBackend. Building without io_uring
+/// (turboq_reactor_IO_URING=OFF, or liburing not found) leaves only EpollBackend, which then is
+/// the default.
 ///
 /// Typical loop:
 ///

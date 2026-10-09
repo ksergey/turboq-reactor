@@ -28,6 +28,8 @@ namespace {
 
 using namespace turboq::reactor;
 
+constexpr char const* kDefaultBackend = TURBOQ_REACTOR_IO_URING ? "io_uring" : "epoll";
+
 void pinToCpu(int cpu) {
     if (cpu < 0) {
         return;
@@ -51,6 +53,7 @@ void pinToCpu(int cpu) {
     throw std::invalid_argument{"unknown timestamping mode: " + value};
 }
 
+#if TURBOQ_REACTOR_IO_URING
 [[nodiscard]] auto parseTaskRunMode(std::string const& value) -> TaskRunMode {
     if (value == "interrupt") {
         return TaskRunMode::Interrupt;
@@ -61,6 +64,7 @@ void pinToCpu(int cpu) {
     }
     throw std::invalid_argument{"unknown taskrun mode: " + value};
 }
+#endif
 
 /// The value of an option given on the command line, none otherwise.
 template <typename T>
@@ -158,7 +162,7 @@ auto main(int argc, char** argv) -> int {
             ("buffers", "receive buffer count", cxxopts::value<unsigned>()->default_value("4096"))
             ("rcvbuf", "SO_RCVBUF size (default: the system's)", cxxopts::value<int>())
             ("timestamping", "none, software or hardware", cxxopts::value<std::string>()->default_value("software"))
-            ("backend", "io_uring or epoll", cxxopts::value<std::string>()->default_value("io_uring"))
+            ("backend", "io_uring (if built) or epoll", cxxopts::value<std::string>()->default_value(kDefaultBackend))
             ("taskrun", "[io_uring] interrupt, cooperative or deferred", cxxopts::value<std::string>()->default_value("deferred"))
             ("d,duration", "seconds to run, 0 = forever", cxxopts::value<unsigned>()->default_value("0"))
             ("cpu", "pin to this CPU (-1 = no pinning)", cxxopts::value<int>()->default_value("-1"))
@@ -201,10 +205,14 @@ auto main(int argc, char** argv) -> int {
         };
         auto const duration = std::chrono::seconds{args["duration"].as<unsigned>()};
         auto const backend = args["backend"].as<std::string>();
+#if TURBOQ_REACTOR_IO_URING
         if (backend == "io_uring") {
             listen<IoUringBackend>(
                 {.taskRunMode = parseTaskRunMode(args["taskrun"].as<std::string>())}, udpOptions, duration);
-        } else if (backend == "epoll") {
+            return 0;
+        }
+#endif
+        if (backend == "epoll") {
             listen<EpollBackend>({}, udpOptions, duration);
         } else {
             throw std::invalid_argument{"unknown backend: " + backend};

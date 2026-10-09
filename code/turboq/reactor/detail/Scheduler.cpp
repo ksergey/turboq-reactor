@@ -12,9 +12,7 @@ Scheduler::~Scheduler() noexcept {
         core->orphaned_ = true;
         core->owner_ = nullptr;
     }
-    for (auto* core : retired_) {
-        delete core;
-    }
+    // retired_ deletes the retired cores.
 }
 
 void Scheduler::flushPendingTx() noexcept {
@@ -40,7 +38,7 @@ void Scheduler::attach(IoHandler* core) noexcept {
     live_ = core;
 }
 
-void Scheduler::retire(IoHandler* core) noexcept {
+void Scheduler::retire(std::unique_ptr<IoHandler> core) noexcept {
     if (core->livePrev_) {
         core->livePrev_->liveNext_ = core->liveNext_;
     } else {
@@ -55,10 +53,9 @@ void Scheduler::retire(IoHandler* core) noexcept {
     // pendingTx_ may hold the core (or a core it owns) even with txDirty_ cleared.
     core->unlinkPendingTx(pendingTx_);
     if (core->retirable()) {
-        core->onRetired();
-        delete core;
+        core->onRetired(); // and deleted on return
     } else {
-        retired_.push_back(core);
+        retired_.push_back(std::move(core));
     }
 }
 
@@ -66,27 +63,24 @@ void Scheduler::collectRetired() noexcept {
     if (retired_.empty()) [[likely]] {
         return;
     }
-    std::erase_if(retired_, [this](IoHandler* core) {
+    std::erase_if(retired_, [this](std::unique_ptr<IoHandler> const& core) {
         if (!core->retirable()) {
             return false;
         }
         core->unlinkPendingTx(pendingTx_);
         core->onRetired();
-        delete core;
-        return true;
+        return true; // erased: deleted
     });
 }
 
-void releaseCore(IoHandler* core) noexcept {
-    if (!core) {
+void releaseCore(std::unique_ptr<IoHandler> core) noexcept {
+    if (!core || core->orphaned_ || !core->owner_) {
+        // The reactor is gone (and with it everything in flight), or the core never got attached:
+        // nothing references it. Deleted on return.
         return;
     }
-    if (core->orphaned_ || !core->owner_) {
-        // The reactor is gone (and with it everything in flight): nothing references the core.
-        delete core;
-        return;
-    }
-    core->owner_->retire(core);
+    auto* const owner = core->owner_;
+    owner->retire(std::move(core));
 }
 
 } // namespace turboq::reactor::detail

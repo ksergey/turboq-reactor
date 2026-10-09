@@ -7,22 +7,33 @@
 #include <cstdint>
 #include <string_view>
 
+#include <turboq/reactor/Config.h>
+
 namespace turboq::reactor {
 
 class IoUringBackend;
 class EpollBackend;
 
-// The backend defaults to io_uring: Reactor<> / TCPConnection<> are the io_uring ones.
-template <typename Backend = IoUringBackend>
+/// The backend of Reactor<>, TCPConnection<>, ...: io_uring, or epoll when the library is built
+/// without io_uring (TURBOQ_REACTOR_IO_URING, see turboq_reactor_IO_URING in CMake).
+#if TURBOQ_REACTOR_IO_URING
+using DefaultBackend = IoUringBackend;
+#else
+using DefaultBackend = EpollBackend;
+#endif
+
+template <typename Backend = DefaultBackend>
 class Reactor;
-template <typename Backend = IoUringBackend>
+template <typename Backend = DefaultBackend>
 class TCPConnection;
-template <typename Backend = IoUringBackend>
+template <typename Backend = DefaultBackend>
 class TLSConnection;
-template <typename Backend = IoUringBackend>
+template <typename Backend = DefaultBackend>
 class UDPConnection;
-template <typename Backend = IoUringBackend>
+template <typename Backend = DefaultBackend>
 class WebsocketConnection;
+template <typename Backend = DefaultBackend>
+class XDPConnection;
 
 /// Wall clock time (CLOCK_REALTIME) with nanosecond resolution. A default-constructed value (the
 /// epoch) means "not available".

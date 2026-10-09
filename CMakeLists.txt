@@ -7,12 +7,15 @@ option(turboq_reactor_BUILD_TESTS "Build tests (*_test.cpp files, linked against
 option(turboq_reactor_TOOLS "Build tools (requires cxxopts, fetched via CPM)" ON)
 option(turboq_reactor_EXAMPLES "Build examples (requires cxxopts, fetched via CPM)" ON)
 option(turboq_reactor_WERROR "Treat warnings as errors in this project's code (CI)" OFF)
+set(turboq_reactor_IO_URING "AUTO" CACHE STRING
+    "io_uring backend: AUTO (built when liburing is available), ON (required) or OFF (epoll only)")
+set_property(CACHE turboq_reactor_IO_URING PROPERTY STRINGS AUTO ON OFF)
+option(turboq_reactor_SYSTEM_LIBURING "Use the system liburing (pkg-config) instead of building it via CPM" OFF)
 
 include(cmake/TurboQReactorHelpers.cmake)
 include(cmake/GetCPM.cmake)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(liburing REQUIRED IMPORTED_TARGET liburing>=2.5)
+include(cmake/TurboQReactorLiburing.cmake)
 find_package(OpenSSL 3.0 REQUIRED)
 
 CPMAddPackage(

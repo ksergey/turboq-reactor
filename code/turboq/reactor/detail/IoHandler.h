@@ -9,6 +9,7 @@
 #include <bit>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace turboq::reactor::detail {
@@ -73,9 +74,27 @@ public:
 };
 
 /// Release a handler whose handle is gone: deleted right away if the kernel is done with it,
-/// otherwise closed and deleted by the reactor once its last completion arrived. Deleted directly
-/// if the reactor no longer exists. nullptr is ignored.
-void releaseCore(IoHandler* core) noexcept;
+/// otherwise closed and handed to the reactor, which deletes it once its last completion arrived.
+/// Deleted directly if the reactor no longer exists (or the core was never attached to one).
+void releaseCore(std::unique_ptr<IoHandler> core) noexcept;
+
+/// Deleter of the core owned by a connection handle: releaseCore() instead of delete, because the
+/// kernel may still be using the core's memory.
+struct CoreReleaser {
+    CoreReleaser() noexcept = default;
+
+    /// Takes over from the std::unique_ptr returned by a core's create().
+    template <typename Core>
+    CoreReleaser(std::default_delete<Core>) noexcept {}
+
+    void operator()(IoHandler* core) const noexcept {
+        releaseCore(std::unique_ptr<IoHandler>{core});
+    }
+};
+
+/// A connection handle's core.
+template <typename Core>
+using CorePtr = std::unique_ptr<Core, CoreReleaser>;
 
 /// io_uring timeouts take a __kernel_timespec. Negative durations become zero.
 [[nodiscard]] inline auto toKernelTimespec(std::chrono::nanoseconds duration) noexcept -> __kernel_timespec {
