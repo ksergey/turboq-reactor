@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <turboq/Platform.h>
+
 namespace turboq::reactor::detail {
 
 /// Header of a datagram received by a multishot recvmsg: the kernel's struct io_uring_recvmsg_out
@@ -27,9 +29,9 @@ struct RecvMsgOut {
 
 /// The header of a completed receive of `length` bytes (the completion result), or nullptr if the
 /// result is an error or too short for the layout.
-[[nodiscard]] inline auto recvMsgValidate(
+[[nodiscard]] TURBOQ_FORCE_INLINE auto recvMsgValidate(
     std::byte* buffer, std::int32_t length, msghdr const& layout) noexcept -> RecvMsgOut* {
-    auto const size = static_cast<std::size_t>(static_cast<std::uint32_t>(length));
+    auto const size = static_cast<std::size_t>(length);
     auto const header = sizeof(RecvMsgOut);
     if (length < 0 || size < header) {
         return nullptr;
@@ -42,16 +44,16 @@ struct RecvMsgOut {
 }
 
 /// The sender address (out->namelen bytes are valid, up to msg_namelen).
-[[nodiscard]] inline auto recvMsgName(RecvMsgOut* out) noexcept -> std::byte* {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto recvMsgName(RecvMsgOut* out) noexcept -> std::byte* {
     return std::bit_cast<std::byte*>(out + 1);
 }
 
-[[nodiscard]] inline auto recvMsgPayload(RecvMsgOut* out, msghdr const& layout) noexcept -> std::byte* {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto recvMsgPayload(RecvMsgOut* out, msghdr const& layout) noexcept -> std::byte* {
     return recvMsgName(out) + layout.msg_namelen + layout.msg_controllen;
 }
 
 /// Payload bytes in a completed receive of `length` bytes.
-[[nodiscard]] inline auto recvMsgPayloadLength(
+[[nodiscard]] TURBOQ_FORCE_INLINE auto recvMsgPayloadLength(
     RecvMsgOut* out, std::int32_t length, msghdr const& layout) noexcept -> std::uint32_t {
     if (length < 0) {
         return 0;
@@ -61,14 +63,15 @@ struct RecvMsgOut {
     return start < end ? static_cast<std::uint32_t>(end - start) : 0;
 }
 
-[[nodiscard]] inline auto recvMsgFirstCmsg(RecvMsgOut* out, msghdr const& layout) noexcept -> cmsghdr* {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto recvMsgFirstCmsg(RecvMsgOut* out, msghdr const& layout) noexcept -> cmsghdr* {
     if (out->controllen < sizeof(cmsghdr)) {
         return nullptr;
     }
     return std::bit_cast<cmsghdr*>(recvMsgName(out) + layout.msg_namelen);
 }
 
-[[nodiscard]] inline auto recvMsgNextCmsg(RecvMsgOut* out, msghdr const& layout, cmsghdr* cmsg) noexcept -> cmsghdr* {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto recvMsgNextCmsg(RecvMsgOut* out, msghdr const& layout, cmsghdr* cmsg) noexcept
+    -> cmsghdr* {
     if (cmsg->cmsg_len < sizeof(cmsghdr)) {
         return nullptr;
     }

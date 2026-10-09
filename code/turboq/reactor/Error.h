@@ -8,6 +8,7 @@
 #include <system_error>
 
 #include <turboq/Error.h>
+#include <turboq/Platform.h>
 
 namespace turboq::reactor {
 
@@ -88,7 +89,7 @@ struct ErrorCategory final : public std::error_category {
     return errorCategory;
 }
 
-[[nodiscard]] inline auto makeErrorCode(Error e) noexcept -> std::error_code {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto makeErrorCode(Error e) noexcept -> std::error_code {
     return {static_cast<int>(e), getErrorCategory()};
 }
 

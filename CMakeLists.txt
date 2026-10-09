@@ -12,7 +12,6 @@ set(turboq_reactor_IO_URING "AUTO" CACHE STRING
 set_property(CACHE turboq_reactor_IO_URING PROPERTY STRINGS AUTO ON OFF)
 option(turboq_reactor_SYSTEM_LIBURING "Use the system liburing (pkg-config) instead of building it via CPM" OFF)
 
-include(cmake/TurboQReactorHelpers.cmake)
 include(cmake/GetCPM.cmake)
 
 include(cmake/TurboQReactorLiburing.cmake)

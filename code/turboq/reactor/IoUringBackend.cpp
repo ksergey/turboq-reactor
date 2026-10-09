@@ -225,8 +225,8 @@ auto IoUringBackend::connect(IoHandler* handler, int fd, sockaddr const* address
     return true;
 }
 
-auto IoUringBackend::pollFd(
-    IoHandler* handler, int fd, unsigned events, __kernel_timespec const* timeout) noexcept -> bool {
+auto IoUringBackend::pollFd(IoHandler* handler, int fd, unsigned events, __kernel_timespec const* timeout) noexcept
+    -> bool {
     if (!this->ensureSqSpace(timeout ? 2 : 1)) {
         return false;
     }
@@ -263,8 +263,8 @@ auto IoUringBackend::recvMsg(IoHandler* handler, int fd, msghdr* message) noexce
     return true;
 }
 
-auto IoUringBackend::recvMultishot(
-    IoHandler* handler, int fd, msghdr const* layout, BufferPool& pool) noexcept -> bool {
+auto IoUringBackend::recvMultishot(IoHandler* handler, int fd, msghdr const* layout, BufferPool& pool) noexcept
+    -> bool {
     auto* sqe = this->getSqe();
     if (!sqe) [[unlikely]] {
         return false;

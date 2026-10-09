@@ -414,8 +414,8 @@ auto EpollBackend::connect(IoHandler* handler, int fd, sockaddr const* address, 
     return true;
 }
 
-auto EpollBackend::pollFd(
-    IoHandler* handler, int fd, unsigned events, __kernel_timespec const* timeout) noexcept -> bool {
+auto EpollBackend::pollFd(IoHandler* handler, int fd, unsigned events, __kernel_timespec const* timeout) noexcept
+    -> bool {
     try {
         auto& st = this->state(fd);
         st.pollHandler = handler;

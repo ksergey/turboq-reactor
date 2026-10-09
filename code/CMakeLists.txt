@@ -44,7 +44,7 @@ if (NOT TURBOQ_REACTOR_IO_URING_ENABLED)
 endif()
 
 if (turboq_reactor_BUILD_TESTS)
-    TurboQReactorAddTestsFromSourceList(Sources
+    TurboQAddTestsFromSourceList(Sources
         PREFIX ${TargetName}
         COMPILE_OPTIONS -Wall -Wextra -g
         LIBS doctest::doctest_with_main ${TargetName})
@@ -54,7 +54,7 @@ if (turboq_reactor_BUILD_TESTS)
     if (TURBOQ_REACTOR_IO_URING_ENABLED)
         set(EpollTestSources ${Sources})
         list(FILTER EpollTestSources INCLUDE REGEX "(Connection|Lifetime)_test\\.cpp$")
-        TurboQReactorAddTestsFromSourceList(EpollTestSources
+        TurboQAddTestsFromSourceList(EpollTestSources
             PREFIX ${TargetName}-epoll
             COMPILE_OPTIONS -Wall -Wextra -g
             DEFINITIONS TURBOQ_REACTOR_TEST_EPOLL
@@ -62,12 +62,12 @@ if (turboq_reactor_BUILD_TESTS)
     endif()
 endif()
 
-TurboQReactorAddBenchmarksFromSourceList(Sources
+TurboQAddBenchmarksFromSourceList(Sources
     PREFIX ${TargetName}
     COMPILE_OPTIONS -Wall -Wextra -g
     LIBS benchmark::benchmark_main ${TargetName})
 
-TurboQReactorExcludeTestsAndBenchmarksFromSourceList(Sources)
+TurboQExcludeTestsAndBenchmarksFromSourceList(Sources)
 
 foreach(file ${Headers})
     target_sources(${TargetName} PUBLIC ${file})

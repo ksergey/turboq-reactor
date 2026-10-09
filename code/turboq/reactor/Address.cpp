@@ -202,8 +202,8 @@ auto toString(Endpoint const& endpoint) -> std::string {
     return '[' + toString(endpoint.address.v6()) + "]:" + std::to_string(endpoint.port);
 }
 
-auto resolve(
-    std::string const& host, std::uint16_t port, int family) -> std::expected<std::vector<Endpoint>, std::error_code> {
+auto resolve(std::string const& host, std::uint16_t port, int family)
+    -> std::expected<std::vector<Endpoint>, std::error_code> {
     addrinfo hints{};
     hints.ai_family = family;
     hints.ai_socktype = SOCK_STREAM; // one entry per address instead of one per socket type

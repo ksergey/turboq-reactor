@@ -12,6 +12,8 @@
 #include <memory>
 #include <vector>
 
+#include <turboq/Platform.h>
+
 namespace turboq::reactor::detail {
 
 class Scheduler;
@@ -97,7 +99,8 @@ template <typename Core>
 using CorePtr = std::unique_ptr<Core, CoreReleaser>;
 
 /// io_uring timeouts take a __kernel_timespec. Negative durations become zero.
-[[nodiscard]] inline auto toKernelTimespec(std::chrono::nanoseconds duration) noexcept -> __kernel_timespec {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto toKernelTimespec(std::chrono::nanoseconds duration) noexcept
+    -> __kernel_timespec {
     duration = std::max(duration, std::chrono::nanoseconds::zero());
     auto const seconds = std::chrono::floor<std::chrono::seconds>(duration);
     return {.tv_sec = seconds.count(), .tv_nsec = (duration - seconds).count()};
@@ -107,15 +110,15 @@ inline constexpr std::uint64_t kOpCodeMask = 0x7;
 
 static_assert(alignof(IoHandler) > kOpCodeMask, "low bits of IoHandler* are used for OpCode");
 
-[[nodiscard]] inline auto encodeUserData(IoHandler* handler, OpCode op) noexcept -> std::uint64_t {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto encodeUserData(IoHandler* handler, OpCode op) noexcept -> std::uint64_t {
     return std::bit_cast<std::uintptr_t>(handler) | static_cast<std::uint64_t>(op);
 }
 
-[[nodiscard]] inline auto decodeHandler(std::uint64_t userData) noexcept -> IoHandler* {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto decodeHandler(std::uint64_t userData) noexcept -> IoHandler* {
     return std::bit_cast<IoHandler*>(static_cast<std::uintptr_t>(userData & ~kOpCodeMask));
 }
 
-[[nodiscard]] inline auto decodeOpCode(std::uint64_t userData) noexcept -> OpCode {
+[[nodiscard]] TURBOQ_FORCE_INLINE auto decodeOpCode(std::uint64_t userData) noexcept -> OpCode {
     return static_cast<OpCode>(userData & kOpCodeMask);
 }
 

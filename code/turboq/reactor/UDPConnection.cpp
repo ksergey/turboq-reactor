@@ -38,8 +38,8 @@ constexpr unsigned kMaxBufferCount = 32768; // io_uring provided buffer ring lim
     return MappedRegion{static_cast<std::byte*>(addr), size};
 }
 
-[[nodiscard]] auto setOption(
-    int fd, int level, int name, void const* value, socklen_t length) noexcept -> std::error_code {
+[[nodiscard]] auto setOption(int fd, int level, int name, void const* value, socklen_t length) noexcept
+    -> std::error_code {
     if (::setsockopt(fd, level, name, value, length) != 0) {
         return makePosixErrorCode(errno);
     }
@@ -381,7 +381,7 @@ void UDPCore<Backend>::onDatagram(std::int32_t res, std::uint32_t flags) noexcep
     }
 
     for (auto* cmsg = detail::recvMsgFirstCmsg(out, recvTemplate_); cmsg != nullptr;
-         cmsg = detail::recvMsgNextCmsg(out, recvTemplate_, cmsg)) {
+        cmsg = detail::recvMsgNextCmsg(out, recvTemplate_, cmsg)) {
         if (cmsg->cmsg_level != SOL_SOCKET) {
             continue;
         }

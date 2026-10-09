@@ -240,8 +240,8 @@ struct Endpoint {
     [[nodiscard]] static auto parse(std::string_view text) noexcept -> std::expected<Endpoint, std::error_code>;
 
     /// From a sockaddr_in / sockaddr_in6. std::nullopt for other families or a short length.
-    [[nodiscard]] static auto fromSockaddr(
-        sockaddr const* address, socklen_t length) noexcept -> std::optional<Endpoint>;
+    [[nodiscard]] static auto fromSockaddr(sockaddr const* address, socklen_t length) noexcept
+        -> std::optional<Endpoint>;
 
     /// Fill a sockaddr_in / sockaddr_in6, return its length.
     auto toSockaddr(sockaddr_storage& storage) const noexcept -> socklen_t;
@@ -260,8 +260,8 @@ struct Endpoint {
 /// Resolve a host name or numeric address with getaddrinfo() (blocking: keep it off latency
 /// critical threads). Unique endpoints in resolver order. Error::AddressResolutionFailed if there
 /// is none.
-[[nodiscard]] auto resolve(std::string const& host, std::uint16_t port,
-    int family = AF_UNSPEC) -> std::expected<std::vector<Endpoint>, std::error_code>;
+[[nodiscard]] auto resolve(std::string const& host, std::uint16_t port, int family = AF_UNSPEC)
+    -> std::expected<std::vector<Endpoint>, std::error_code>;
 
 } // namespace turboq::reactor
 
