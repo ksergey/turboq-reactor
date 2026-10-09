@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -73,7 +74,7 @@ TURBOQ_FORCE_INLINE void applyWsMask(std::byte* data, std::size_t size, std::uin
     }
     std::uint64_t key8;
     std::memcpy(&key8, &maskKey, 4);
-    std::memcpy(reinterpret_cast<char*>(&key8) + 4, &maskKey, 4);
+    std::memcpy(std::bit_cast<char*>(&key8) + 4, &maskKey, 4);
     std::size_t i = 0;
     for (; i + 8 <= size; i += 8) {
         std::uint64_t word;
@@ -81,7 +82,7 @@ TURBOQ_FORCE_INLINE void applyWsMask(std::byte* data, std::size_t size, std::uin
         word ^= key8;
         std::memcpy(data + i, &word, 8);
     }
-    auto const* key = reinterpret_cast<unsigned char const*>(&maskKey);
+    auto const* key = std::bit_cast<unsigned char const*>(&maskKey);
     for (; i < size; ++i) {
         data[i] ^= static_cast<std::byte>(key[i & 3]);
     }

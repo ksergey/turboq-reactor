@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -81,7 +82,7 @@ void runServer(std::uint16_t port, std::size_t size) {
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
-    if (::bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || ::listen(listener, 1) != 0) {
+    if (::bind(listener, std::bit_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || ::listen(listener, 1) != 0) {
         throw std::runtime_error{"bind/listen failed"};
     }
     std::println("server: listening on port {}", port);
@@ -172,7 +173,7 @@ void runBaselineClient(
     if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
         throw std::invalid_argument{"baseline client needs a numeric IPv4 address"};
     }
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    if (::connect(fd, std::bit_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         throw std::runtime_error{"connect failed"};
     }
 

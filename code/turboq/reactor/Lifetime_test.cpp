@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <memory>
@@ -40,7 +41,7 @@ template <typename Pred>
 }
 
 [[nodiscard]] auto asBytes(std::string_view data) -> std::span<std::byte const> {
-    return {reinterpret_cast<std::byte const*>(data.data()), data.size()};
+    return {std::bit_cast<std::byte const*>(data.data()), data.size()};
 }
 
 class Listener {
@@ -55,10 +56,10 @@ public:
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        REQUIRE_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+        REQUIRE_EQ(::bind(fd_, std::bit_cast<sockaddr*>(&addr), sizeof(addr)), 0);
         REQUIRE_EQ(::listen(fd_, 64), 0);
         socklen_t len = sizeof(addr);
-        ::getsockname(fd_, reinterpret_cast<sockaddr*>(&addr), &len);
+        ::getsockname(fd_, std::bit_cast<sockaddr*>(&addr), &len);
         port_ = ntohs(addr.sin_port);
     }
 

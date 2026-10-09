@@ -7,6 +7,7 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 
+#include <bit>
 #include <string>
 
 #include "Error.h"
@@ -106,7 +107,7 @@ auto TCPCore<Backend>::connect() -> std::expected<void, std::error_code> {
         }
     }
 
-    if (!ring_.connect(this, fd_, reinterpret_cast<sockaddr const*>(&address_), addressLength_, &connectTimeout_)) {
+    if (!ring_.connect(this, fd_, std::bit_cast<sockaddr const*>(&address_), addressLength_, &connectTimeout_)) {
         return this->failSync(makeErrorCode(Error::SubmissionQueueFull));
     }
     ++inflight_;

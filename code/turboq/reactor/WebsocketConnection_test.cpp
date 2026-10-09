@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <csignal>
 #include <cstring>
@@ -43,7 +44,7 @@ template <typename Pred>
 }
 
 [[nodiscard]] auto asString(std::span<std::byte const> data) -> std::string {
-    return {reinterpret_cast<char const*>(data.data()), data.size()};
+    return {std::bit_cast<char const*>(data.data()), data.size()};
 }
 
 struct Frame {
@@ -178,10 +179,10 @@ public:
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        REQUIRE_EQ(::bind(listener_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+        REQUIRE_EQ(::bind(listener_, std::bit_cast<sockaddr*>(&addr), sizeof(addr)), 0);
         REQUIRE_EQ(::listen(listener_, 4), 0);
         socklen_t len = sizeof(addr);
-        ::getsockname(listener_, reinterpret_cast<sockaddr*>(&addr), &len);
+        ::getsockname(listener_, std::bit_cast<sockaddr*>(&addr), &len);
         port_ = ntohs(addr.sin_port);
 
         thread_ = std::thread{[this, script = std::move(script), respond = std::move(respond), connections] {
@@ -284,7 +285,7 @@ TEST_SUITE("WebsocketConnection") {
             auto const original = data;
             detail::applyWsMask(data.data(), size, 0xA1B2C3D4);
             std::uint32_t const k = 0xA1B2C3D4;
-            auto const* key = reinterpret_cast<unsigned char const*>(&k);
+            auto const* key = std::bit_cast<unsigned char const*>(&k);
             for (std::size_t i = 0; i < size; ++i) {
                 REQUIRE_EQ(data[i], original[i] ^ static_cast<std::byte>(key[i % 4]));
             }
@@ -537,7 +538,7 @@ TEST_SUITE("WebsocketConnection") {
             return ws.state() == ConnectionState::Ready;
         }));
         std::string_view payload = "keepalive";
-        REQUIRE(ws.ping({reinterpret_cast<std::byte const*>(payload.data()), payload.size()}));
+        REQUIRE(ws.ping({std::bit_cast<std::byte const*>(payload.data()), payload.size()}));
         REQUIRE(pollUntil(reactor, [&] {
             return !ws.rx.empty();
         }));

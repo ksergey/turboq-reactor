@@ -8,6 +8,7 @@
 #include <openssl/evp.h>
 
 #include <array>
+#include <bit>
 #include <cerrno>
 #include <charconv>
 
@@ -18,7 +19,7 @@ namespace {
 
 [[nodiscard]] auto base64(unsigned char const* data, std::size_t size) -> std::string {
     std::string result(4 * ((size + 2) / 3), '\0');
-    int const length = ::EVP_EncodeBlock(reinterpret_cast<unsigned char*>(result.data()), data, static_cast<int>(size));
+    int const length = ::EVP_EncodeBlock(std::bit_cast<unsigned char*>(result.data()), data, static_cast<int>(size));
     result.resize(static_cast<std::size_t>(length));
     return result;
 }

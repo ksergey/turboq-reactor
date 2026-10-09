@@ -16,6 +16,7 @@
 #include <openssl/x509_vfy.h>
 
 #include <algorithm>
+#include <bit>
 #include <optional>
 #include <span>
 #include <string>
@@ -518,7 +519,7 @@ void TLSCore<Backend>::onKernelRecv(std::int32_t res) noexcept {
         // The buffer was zeroed before the receive, so a missing control message reads as
         // cmsg_len == 0.
         unsigned char recordType = kRecordApplicationData;
-        auto const* cmsg = reinterpret_cast<cmsghdr const*>(recvControl_);
+        auto const* cmsg = std::bit_cast<cmsghdr const*>(&recvControl_[0]);
         if (cmsg->cmsg_len != 0 && cmsg->cmsg_level == SOL_TLS && cmsg->cmsg_type == TLS_GET_RECORD_TYPE) {
             recordType = *CMSG_DATA(cmsg);
         }

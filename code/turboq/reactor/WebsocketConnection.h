@@ -5,6 +5,7 @@
 
 #include <linux/time_types.h>
 
+#include <bit>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -171,7 +172,7 @@ public:
 
         /// \overload
         [[nodiscard]] auto push(std::string_view text) noexcept -> bool {
-            return this->push({reinterpret_cast<std::byte const*>(text.data()), text.size()}, WsOpcode::Text);
+            return this->push({std::bit_cast<std::byte const*>(text.data()), text.size()}, WsOpcode::Text);
         }
 
         /// Send queued frames now instead of waiting for the next Reactor::poll().

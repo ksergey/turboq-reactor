@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -68,11 +69,11 @@ template <typename Pred>
 }
 
 [[nodiscard]] auto asString(std::span<std::byte const> data) -> std::string {
-    return {reinterpret_cast<char const*>(data.data()), data.size()};
+    return {std::bit_cast<char const*>(data.data()), data.size()};
 }
 
 [[nodiscard]] auto asBytes(std::string_view data) -> std::span<std::byte const> {
-    return {reinterpret_cast<std::byte const*>(data.data()), data.size()};
+    return {std::bit_cast<std::byte const*>(data.data()), data.size()};
 }
 
 /// Self-signed P-256 certificate for "localhost" / 127.0.0.1, written to a temporary PEM file so it
@@ -94,8 +95,8 @@ public:
         ::X509_gmtime_adj(::X509_getm_notAfter(cert_), 24 * 3600);
         ::X509_set_pubkey(cert_, key_);
         X509_NAME* name = ::X509_get_subject_name(cert_);
-        ::X509_NAME_add_entry_by_txt(
-            name, "CN", MBSTRING_ASC, reinterpret_cast<unsigned char const*>("localhost"), -1, -1, 0);
+        static constexpr unsigned char kCommonName[] = "localhost";
+        ::X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, kCommonName, -1, -1, 0);
         ::X509_set_issuer_name(cert_, name);
 
         X509V3_CTX ctx;
@@ -166,10 +167,10 @@ public:
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        REQUIRE_EQ(::bind(listener_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+        REQUIRE_EQ(::bind(listener_, std::bit_cast<sockaddr*>(&addr), sizeof(addr)), 0);
         REQUIRE_EQ(::listen(listener_, 4), 0);
         socklen_t len = sizeof(addr);
-        ::getsockname(listener_, reinterpret_cast<sockaddr*>(&addr), &len);
+        ::getsockname(listener_, std::bit_cast<sockaddr*>(&addr), &len);
         port_ = ntohs(addr.sin_port);
 
         if (ctx_) {

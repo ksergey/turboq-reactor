@@ -4,6 +4,7 @@
 #include "WebsocketConnection.h"
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
 #include <string>
 
@@ -212,7 +213,7 @@ void WebsocketCore<Backend>::onStreamReady() noexcept {
     }
     request += "\r\n";
 
-    if (!tcp_.tx.push({reinterpret_cast<std::byte const*>(request.data()), request.size()})) {
+    if (!tcp_.tx.push({std::bit_cast<std::byte const*>(request.data()), request.size()})) {
         this->fail(makeErrorCode(Error::InvalidOptions), 0); // tx ring smaller than the request
         return;
     }
@@ -263,7 +264,7 @@ void WebsocketCore<Backend>::onCompletion(
 template <typename Backend>
 void WebsocketCore<Backend>::completeUpgrade() noexcept {
     auto const data = tcp_.rx.fetch();
-    std::string_view const text{reinterpret_cast<char const*>(data.data()), data.size()};
+    std::string_view const text{std::bit_cast<char const*>(data.data()), data.size()};
     auto const headerEnd = text.find("\r\n\r\n");
     if (headerEnd == std::string_view::npos) {
         if (text.size() > kMaxResponseHeaderSize) {
@@ -371,7 +372,7 @@ void WebsocketCore<Backend>::parseFrames() noexcept {
         if (available < 2) {
             break;
         }
-        auto const* p = reinterpret_cast<unsigned char const*>(this->streamPointer(parsePos_));
+        auto const* p = std::bit_cast<unsigned char const*>(this->streamPointer(parsePos_));
         bool const fin = (p[0] & 0x80) != 0;
         auto const opcode = static_cast<WsOpcode>(p[0] & 0x0F);
         if ((p[0] & 0x70) != 0 || (p[1] & 0x80) != 0) {
@@ -434,14 +435,14 @@ void WebsocketCore<Backend>::parseFrames() noexcept {
         case WsOpcode::Pong: break;
         case WsOpcode::Close: {
             std::uint16_t code = kCloseNoStatus;
-            auto const* body = reinterpret_cast<unsigned char const*>(this->streamPointer(payload));
+            auto const* body = std::bit_cast<unsigned char const*>(this->streamPointer(payload));
             if (size == 1) {
                 this->fail(makeErrorCode(Error::WsProtocolError), kCloseProtocolError);
                 return;
             }
             if (size >= 2) {
                 code = static_cast<std::uint16_t>(body[0] << 8 | body[1]);
-                closeReason_.assign(reinterpret_cast<char const*>(body) + 2, size - 2);
+                closeReason_.assign(std::bit_cast<char const*>(body) + 2, size - 2);
             }
             parsePos_ = frameEnd;
             // Echo the status code (an empty Close if there was none) and close.

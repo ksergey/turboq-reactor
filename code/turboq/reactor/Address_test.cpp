@@ -4,6 +4,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 
+#include <bit>
 #include <format>
 #include <ostream>
 #include <string>
@@ -150,10 +151,10 @@ TEST_SUITE("Address") {
             auto const length = endpoint.toSockaddr(storage);
             REQUIRE_EQ(length, endpoint.address.isV4() ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
             REQUIRE_EQ(storage.ss_family, endpoint.address.family());
-            auto const back = Endpoint::fromSockaddr(reinterpret_cast<sockaddr const*>(&storage), length);
+            auto const back = Endpoint::fromSockaddr(std::bit_cast<sockaddr const*>(&storage), length);
             REQUIRE(back);
             REQUIRE_EQ(*back, endpoint);
-            REQUIRE_FALSE(Endpoint::fromSockaddr(reinterpret_cast<sockaddr const*>(&storage), length - 1));
+            REQUIRE_FALSE(Endpoint::fromSockaddr(std::bit_cast<sockaddr const*>(&storage), length - 1));
         }
         sockaddr local{};
         local.sa_family = AF_UNIX;

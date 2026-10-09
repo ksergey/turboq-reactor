@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <bit>
 #include <ctime>
 
 #include <turboq/Math.h>
@@ -247,7 +248,7 @@ auto UDPCore<Backend>::open() -> std::expected<void, std::error_code> {
     }
     sockaddr_storage bindAddress{};
     socklen_t const bindLength = bindTo.toSockaddr(bindAddress);
-    if (::bind(fd_, reinterpret_cast<sockaddr const*>(&bindAddress), bindLength) != 0) {
+    if (::bind(fd_, std::bit_cast<sockaddr const*>(&bindAddress), bindLength) != 0) {
         return this->failSync(makePosixErrorCode(errno));
     }
 
@@ -303,10 +304,10 @@ auto UDPCore<Backend>::localEndpoint() const noexcept -> Endpoint {
     }
     sockaddr_storage address{};
     socklen_t length = sizeof(address);
-    if (::getsockname(fd_, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+    if (::getsockname(fd_, std::bit_cast<sockaddr*>(&address), &length) != 0) {
         return {};
     }
-    return Endpoint::fromSockaddr(reinterpret_cast<sockaddr const*>(&address), length).value_or(Endpoint{});
+    return Endpoint::fromSockaddr(std::bit_cast<sockaddr const*>(&address), length).value_or(Endpoint{});
 }
 
 template <typename Backend>
@@ -506,7 +507,7 @@ void UDPCore<Backend>::sendDirect() noexcept {
         auto const length = txLengths_[txHead_ & txMask_];
         auto const data = txBuffer_.readable();
         auto const rc = ::sendto(fd_, data.data(), length, MSG_DONTWAIT | MSG_NOSIGNAL,
-            reinterpret_cast<sockaddr const*>(&remote_), remoteLength_);
+            std::bit_cast<sockaddr const*>(&remote_), remoteLength_);
         if (rc >= 0) [[likely]] {
             this->popDatagram();
         } else if (errno == EINTR) {

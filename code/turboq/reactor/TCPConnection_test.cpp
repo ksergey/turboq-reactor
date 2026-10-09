@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <memory>
@@ -42,10 +43,10 @@ public:
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         addr.sin_port = 0;
-        REQUIRE_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+        REQUIRE_EQ(::bind(fd_, std::bit_cast<sockaddr*>(&addr), sizeof(addr)), 0);
         REQUIRE_EQ(::listen(fd_, 16), 0);
         socklen_t len = sizeof(addr);
-        REQUIRE_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&addr), &len), 0);
+        REQUIRE_EQ(::getsockname(fd_, std::bit_cast<sockaddr*>(&addr), &len), 0);
         port_ = ntohs(addr.sin_port);
     }
 
@@ -96,11 +97,11 @@ void writeAll(int fd, std::string_view data) {
 }
 
 [[nodiscard]] auto asString(std::span<std::byte const> data) -> std::string {
-    return {reinterpret_cast<char const*>(data.data()), data.size()};
+    return {std::bit_cast<char const*>(data.data()), data.size()};
 }
 
 [[nodiscard]] auto asBytes(std::string_view data) -> std::span<std::byte const> {
-    return {reinterpret_cast<std::byte const*>(data.data()), data.size()};
+    return {std::bit_cast<std::byte const*>(data.data()), data.size()};
 }
 
 } // namespace
@@ -223,7 +224,7 @@ TEST_SUITE("TCPConnection") {
         sockaddr_in6 addr{};
         addr.sin6_family = AF_INET6;
         addr.sin6_addr = in6addr_loopback;
-        if (fd < 0 || ::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        if (fd < 0 || ::bind(fd, std::bit_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
             if (fd >= 0) {
                 ::close(fd);
             }
@@ -232,7 +233,7 @@ TEST_SUITE("TCPConnection") {
         }
         REQUIRE_EQ(::listen(fd, 1), 0);
         socklen_t len = sizeof(addr);
-        ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len);
+        ::getsockname(fd, std::bit_cast<sockaddr*>(&addr), &len);
 
         Reactor reactor;
         TCPConnection conn{reactor, {.endpoint = {IPv6Address::loopback(), ntohs(addr.sin6_port)}}};

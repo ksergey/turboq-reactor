@@ -7,6 +7,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <bit>
 #include <limits>
 #include <system_error>
 
@@ -336,10 +337,10 @@ IoUringBackend::BufferPool::BufferPool(
         backend.freeBufferGroups_.push_back(groupId_);
         throw;
     }
-    bufferRing_ = reinterpret_cast<io_uring_buf_ring*>(ringMemory_.data());
+    bufferRing_ = std::bit_cast<io_uring_buf_ring*>(ringMemory_.data());
     ::io_uring_buf_ring_init(bufferRing_);
     io_uring_buf_reg reg{};
-    reg.ring_addr = reinterpret_cast<std::uint64_t>(bufferRing_);
+    reg.ring_addr = std::bit_cast<std::uintptr_t>(bufferRing_);
     reg.ring_entries = count;
     reg.bgid = groupId_;
     if (int const rc = ::io_uring_register_buf_ring(&backend.ring_, &reg, 0); rc < 0) {

@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <string>
@@ -36,11 +37,11 @@ template <typename Pred>
 }
 
 [[nodiscard]] auto asString(std::span<std::byte const> data) -> std::string {
-    return {reinterpret_cast<char const*>(data.data()), data.size()};
+    return {std::bit_cast<char const*>(data.data()), data.size()};
 }
 
 [[nodiscard]] auto asBytes(std::string_view data) -> std::span<std::byte const> {
-    return {reinterpret_cast<std::byte const*>(data.data()), data.size()};
+    return {std::bit_cast<std::byte const*>(data.data()), data.size()};
 }
 
 /// Plain UDP socket sending to 127.0.0.1:port, the "exchange" side.
@@ -65,7 +66,7 @@ public:
     }
 
     void send(std::string_view data) const {
-        REQUIRE_EQ(::sendto(fd_, data.data(), data.size(), 0, reinterpret_cast<sockaddr const*>(&to_), sizeof(to_)),
+        REQUIRE_EQ(::sendto(fd_, data.data(), data.size(), 0, std::bit_cast<sockaddr const*>(&to_), sizeof(to_)),
             static_cast<ssize_t>(data.size()));
     }
 
@@ -79,7 +80,7 @@ public:
     [[nodiscard]] auto localPort() const -> std::uint16_t {
         sockaddr_in addr{};
         socklen_t len = sizeof(addr);
-        REQUIRE_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&addr), &len), 0);
+        REQUIRE_EQ(::getsockname(fd_, std::bit_cast<sockaddr*>(&addr), &len), 0);
         return ntohs(addr.sin_port);
     }
 };
