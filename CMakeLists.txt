@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.25)
 
 project(turboq-reactor CXX)
 
@@ -11,11 +11,19 @@ set(turboq_reactor_IO_URING "AUTO" CACHE STRING
     "io_uring backend: AUTO (built when liburing is available), ON (required) or OFF (epoll only)")
 set_property(CACHE turboq_reactor_IO_URING PROPERTY STRINGS AUTO ON OFF)
 option(turboq_reactor_SYSTEM_LIBURING "Use the system liburing (pkg-config) instead of building it via CPM" OFF)
+option(turboq_reactor_SYSTEM_OPENSSL "Use the system OpenSSL (find_package) instead of building it via CPM" OFF)
+option(turboq_reactor_SSL "Build turboq-reactor::ssl (TLS; needs OpenSSL)" ON)
+option(turboq_reactor_WEBSOCKET "Build turboq-reactor::websocket (needs turboq_reactor_SSL)" ON)
+option(turboq_reactor_XDP "Build turboq-reactor::xdp (AF_XDP receive)" ON)
 
 include(cmake/GetCPM.cmake)
 
 include(cmake/TurboQReactorLiburing.cmake)
-find_package(OpenSSL 3.0 REQUIRED)
+if (turboq_reactor_SSL)
+    include(cmake/TurboQReactorOpenSSL.cmake)
+elseif (turboq_reactor_WEBSOCKET)
+    message(STATUS "turboq-reactor: websocket needs ssl (turboq_reactor_SSL): not built")
+endif()
 
 CPMAddPackage(
     NAME turboq

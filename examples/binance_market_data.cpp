@@ -33,6 +33,7 @@
 #include <cxxopts.hpp>
 
 #include <turboq/reactor/Reactor.h>
+#include <turboq/reactor/WebsocketConnection.h>
 
 namespace {
 

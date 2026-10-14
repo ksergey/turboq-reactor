@@ -31,6 +31,7 @@
 #include <cxxopts.hpp>
 
 #include <turboq/reactor/Reactor.h>
+#include <turboq/reactor/UDPConnection.h>
 
 namespace {
 

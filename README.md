@@ -4,15 +4,37 @@
 [![CMake](https://img.shields.io/badge/build-CMake-informational.svg)](https://cmake.org)
 [![CI](https://github.com/ksergey/turboq-reactor/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/ksergey/turboq-reactor/actions/workflows/build-and-test.yml)
 
-> turboq-reactor is a single-threaded io_uring (or epoll) reactor that exposes every network connection as a
+> turboq-reactor is a single-threaded epoll or io_uring reactor that exposes every network connection as a
 > pair of zero-copy queues: one to read from, one to write to. Built for low-latency exchange
 > connectivity (TCP, multicast, kernel TLS, WebSocket), part of the [turboq](https://github.com/ksergey/turboq) family.
 
+## Libraries
+
+| target | contents | depends on |
+|---|---|---|
+| `turboq-reactor::core` | `Reactor`, epoll backend, TCP, UDP / multicast, addresses | turboq |
+| `turboq-reactor::uring` | io_uring backend, the default backend when linked | core, liburing |
+| `turboq-reactor::ssl` | `TLSConnection`: kernel TLS, OpenSSL fallback | core, OpenSSL |
+| `turboq-reactor::websocket` | `WebsocketConnection` (ws://, wss://) | ssl |
+| `turboq-reactor::xdp` | `XDPConnection`: AF_XDP receive | core |
+| `turboq::reactor` | every library that is built | |
+
+Each library lives in its own directory under `code/`; headers are included as
+`<turboq/reactor/...>` (`<turboq/reactor/All.h>` includes everything that is linked). Connection
+templates are header-only, so any combination works: link only what you use. `Reactor<>` /
+`TCPConnection<>` are io_uring when `turboq-reactor::uring` is linked, epoll otherwise.
+
+Options: `turboq_reactor_IO_URING` (`AUTO`, `ON`, `OFF`), `turboq_reactor_SSL`,
+`turboq_reactor_WEBSOCKET`, `turboq_reactor_XDP` (`ON` by default); `turboq_reactor_SYSTEM_LIBURING`
+and `turboq_reactor_SYSTEM_OPENSSL` use the system libraries instead of building them.
+
 ## Requirements
 
-Linux 6.1+, a C++23 compiler (GCC 14+, Clang 20+), CMake 3.24+, OpenSSL 3.0+. liburing is
-fetched and built via CPM like the other dependencies.
-For kernel TLS: `sudo modprobe tls` (otherwise TLS runs in OpenSSL in userspace).
+Linux 6.1+, a C++23 compiler (GCC 14+, Clang 20+), CMake 3.25+. liburing and OpenSSL (3.5 LTS,
+with kernel TLS, via [openssl-cmake](https://github.com/jimmy-park/openssl-cmake); needs Perl 5 and
+make) are fetched and built via CPM like the other dependencies; the built OpenSSL uses the
+system's CA certificates. For kernel TLS: `sudo modprobe tls` (otherwise TLS runs in OpenSSL in
+userspace).
 
 ## Integration
 
@@ -24,19 +46,14 @@ CPMAddPackage(
     GIT_TAG master
     OPTIONS "turboq_reactor_BUILD_TESTS OFF" "turboq_reactor_TOOLS OFF" "turboq_reactor_EXAMPLES OFF")
 
-target_link_libraries(your_app PRIVATE turboq::reactor)
+target_link_libraries(your_app PRIVATE turboq-reactor::websocket turboq-reactor::uring)
 ```
-
-The io_uring backend is controlled by `turboq_reactor_IO_URING`: `AUTO` (default, built when
-liburing is available), `ON` (required) or `OFF` (epoll only, no liburing at all; epoll becomes
-the default backend). `turboq_reactor_SYSTEM_LIBURING=ON` uses the system liburing (pkg-config)
-instead of building it.
 
 ## Example
 
 ```cpp
 #include <print>
-#include <turboq/reactor/Reactor.h>
+#include <turboq/reactor/WebsocketConnection.h>
 
 using namespace turboq::reactor;
 
@@ -67,10 +84,10 @@ backoff, a liveness watchdog and graceful shutdown.
 [`examples/multicast_feeds.cpp`](examples/multicast_feeds.cpp) receives several multicast groups
 and prints each datagram with its NIC, kernel and user receive timestamps.
 
-The backend is a template parameter defaulting to io_uring. For epoll declare
-`Reactor<EpollBackend> reactor;` — connections deduce the backend from the reactor they are given
-(`TCPConnection conn{reactor, {...}}`); as class members write `TCPConnection<>` (io_uring) or
-`TCPConnection<EpollBackend>`.
+The backend is a template parameter. To pick it explicitly declare `Reactor<EpollBackend> reactor;`
+(or `IoUringBackend`) — connections deduce the backend from the reactor they are given
+(`TCPConnection conn{reactor, {...}}`); as class members write `TCPConnection<>` (the default
+backend) or `TCPConnection<EpollBackend>`.
 
 ## AF_XDP
 
