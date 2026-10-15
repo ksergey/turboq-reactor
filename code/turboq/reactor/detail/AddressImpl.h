@@ -120,13 +120,15 @@ inline auto Endpoint::parse(std::string_view text) noexcept -> std::expected<End
         if (!address) {
             return std::unexpected(address.error());
         }
-        return Endpoint{*address, *portValue};
+        // Built in place: moving a temporary Endpoint in copies the unused bytes of the variant,
+        // which GCC (-O2, -Wmaybe-uninitialized) reports as uninitialized.
+        return std::expected<Endpoint, std::error_code>{std::in_place, *address, *portValue};
     }
     auto address = IPv4Address::parse(host);
     if (!address) {
         return std::unexpected(address.error());
     }
-    return Endpoint{*address, *portValue};
+    return std::expected<Endpoint, std::error_code>{std::in_place, *address, *portValue};
 }
 
 inline auto Endpoint::fromSockaddr(sockaddr const* address, std::size_t length) noexcept -> std::optional<Endpoint> {
@@ -138,14 +140,14 @@ inline auto Endpoint::fromSockaddr(sockaddr const* address, std::size_t length) 
         std::memcpy(&in, address, sizeof(in));
         IPv4Address::Bytes bytes;
         std::memcpy(bytes.data(), &in.sin_addr, bytes.size());
-        return Endpoint{IPv4Address{bytes}, ntohs(in.sin_port)};
+        return std::optional<Endpoint>{std::in_place, IPv4Address{bytes}, ntohs(in.sin_port)};
     }
     if (address->sa_family == AF_INET6 && length >= static_cast<socklen_t>(sizeof(sockaddr_in6))) {
         sockaddr_in6 in6;
         std::memcpy(&in6, address, sizeof(in6));
         IPv6Address::Bytes bytes;
         std::memcpy(bytes.data(), &in6.sin6_addr, bytes.size());
-        return Endpoint{IPv6Address{bytes, in6.sin6_scope_id}, ntohs(in6.sin6_port)};
+        return std::optional<Endpoint>{std::in_place, IPv6Address{bytes, in6.sin6_scope_id}, ntohs(in6.sin6_port)};
     }
     return std::nullopt;
 }
