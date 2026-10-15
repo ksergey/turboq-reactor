@@ -1,4 +1,5 @@
-# io_uring backend and liburing.
+# liburing for the tests, tools and examples of this project (the library itself is header-only:
+# its users link liburing when they use IoUringBackend).
 #
 # In:  turboq_reactor_IO_URING (AUTO, ON, OFF), turboq_reactor_SYSTEM_LIBURING (bool)
 # Out: TURBOQ_REACTOR_IO_URING_ENABLED (ON/OFF) and, when ON, the target liburing::liburing.
@@ -90,9 +91,9 @@ else()
 endif()
 
 if (TURBOQ_REACTOR_IO_URING_ENABLED)
-    message(STATUS "turboq-reactor: io_uring backend ON (${_liburing_from})")
+    message(STATUS "turboq-reactor: tests/tools/examples with io_uring (${_liburing_from})")
 elseif (turboq_reactor_IO_URING STREQUAL "ON")
-    message(FATAL_ERROR "turboq-reactor: io_uring backend requested (turboq_reactor_IO_URING=ON) but ${_liburing_problem}")
+    message(FATAL_ERROR "turboq-reactor: io_uring requested (turboq_reactor_IO_URING=ON) but ${_liburing_problem}")
 else()
-    message(STATUS "turboq-reactor: io_uring backend OFF (${_liburing_problem}), epoll is the default backend")
+    message(STATUS "turboq-reactor: tests/tools/examples without io_uring (${_liburing_problem})")
 endif()

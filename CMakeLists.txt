@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.24)
 
 project(turboq-reactor CXX)
 
@@ -7,28 +7,29 @@ option(turboq_reactor_BUILD_TESTS "Build tests (*_test.cpp files, linked against
 option(turboq_reactor_TOOLS "Build tools (requires cxxopts, fetched via CPM)" ON)
 option(turboq_reactor_EXAMPLES "Build examples (requires cxxopts, fetched via CPM)" ON)
 option(turboq_reactor_WERROR "Treat warnings as errors in this project's code (CI)" OFF)
+# The library is header-only and needs turboq only. Tests, tools and examples also use io_uring
+# (liburing) and TLS (OpenSSL) when available; these options only apply to them.
 set(turboq_reactor_IO_URING "AUTO" CACHE STRING
-    "io_uring backend: AUTO (built when liburing is available), ON (required) or OFF (epoll only)")
+    "io_uring in tests/tools/examples: AUTO (when liburing is available), ON (required) or OFF")
 set_property(CACHE turboq_reactor_IO_URING PROPERTY STRINGS AUTO ON OFF)
 option(turboq_reactor_SYSTEM_LIBURING "Use the system liburing (pkg-config) instead of building it via CPM" OFF)
-option(turboq_reactor_SYSTEM_OPENSSL "Use the system OpenSSL (find_package) instead of building it via CPM" OFF)
-option(turboq_reactor_SSL "Build turboq-reactor::ssl (TLS; needs OpenSSL)" ON)
-option(turboq_reactor_WEBSOCKET "Build turboq-reactor::websocket (needs turboq_reactor_SSL)" ON)
-option(turboq_reactor_XDP "Build turboq-reactor::xdp (AF_XDP receive)" ON)
 
 include(cmake/GetCPM.cmake)
 
-include(cmake/TurboQReactorLiburing.cmake)
-if (turboq_reactor_SSL)
-    include(cmake/TurboQReactorOpenSSL.cmake)
-elseif (turboq_reactor_WEBSOCKET)
-    message(STATUS "turboq-reactor: websocket needs ssl (turboq_reactor_SSL): not built")
+set(TURBOQ_REACTOR_DEV OFF)
+if (turboq_reactor_BUILD_TESTS OR turboq_reactor_TOOLS OR turboq_reactor_EXAMPLES)
+    set(TURBOQ_REACTOR_DEV ON)
+    include(cmake/TurboQReactorLiburing.cmake)
+    find_package(OpenSSL 3.0)
+    if (NOT OpenSSL_FOUND)
+        message(STATUS "turboq-reactor: OpenSSL not found: TLS and WebSocket tests and examples are not built")
+    endif()
 endif()
 
 CPMAddPackage(
     NAME turboq
     GITHUB_REPOSITORY ksergey/turboq
-    GIT_TAG 0.2.0
+    GIT_TAG master
     OPTIONS "turboq_BUILD_TESTS OFF" "turboq_TOOLS OFF" "turboq_PYTHON OFF")
 
 if (turboq_reactor_BUILD_TESTS)
@@ -42,6 +43,22 @@ if (turboq_reactor_WERROR)
 endif()
 
 add_subdirectory(code)
+
+# What the tests, tools and examples of this project link: the library plus liburing and OpenSSL
+# when available (TURBOQ_REACTOR_IO_URING=1 makes io_uring the default backend,
+# TURBOQ_REACTOR_HAS_OPENSSL=1 enables the TLS / WebSocket parts).
+if (TURBOQ_REACTOR_DEV)
+    add_library(turboq-reactor-dev INTERFACE)
+    target_link_libraries(turboq-reactor-dev INTERFACE turboq::reactor)
+    if (TURBOQ_REACTOR_IO_URING_ENABLED)
+        target_link_libraries(turboq-reactor-dev INTERFACE liburing::liburing)
+        target_compile_definitions(turboq-reactor-dev INTERFACE TURBOQ_REACTOR_IO_URING=1)
+    endif()
+    if (OpenSSL_FOUND)
+        target_link_libraries(turboq-reactor-dev INTERFACE OpenSSL::SSL OpenSSL::Crypto)
+        target_compile_definitions(turboq-reactor-dev INTERFACE TURBOQ_REACTOR_HAS_OPENSSL=1)
+    endif()
+endif()
 
 if (turboq_reactor_TOOLS)
     add_subdirectory(tools)

@@ -20,10 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: load kernel tls
+      - name: install openssl, kernel tls
         shell: bash
         run: |
-          # liburing and OpenSSL are built from source (CPM), see cmake/TurboQReactor*.cmake
+          # liburing is built from source (CPM), see cmake/TurboQReactorLiburing.cmake
+          sudo apt update
+          sudo apt install -y libssl-dev
           # kTLS tests skip themselves when the tls module is missing; load it so they run
           sudo modprobe tls || echo "tls kernel module is not available"
           cat /proc/sys/net/ipv4/tcp_available_ulp
@@ -219,10 +221,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: load kernel tls
+      - name: install openssl, kernel tls
         shell: bash
         run: |
-          # liburing and OpenSSL are built from source (CPM), see cmake/TurboQReactor*.cmake
+          # liburing is built from source (CPM), see cmake/TurboQReactorLiburing.cmake
+          sudo apt update
+          sudo apt install -y libssl-dev
           # kTLS tests skip themselves when the tls module is missing; load it so they run
           sudo modprobe tls || echo "tls kernel module is not available"
           cat /proc/sys/net/ipv4/tcp_available_ulp
@@ -351,15 +355,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - variant: 'core only (no io_uring, ssl, websocket, xdp)'
-            packages: ''
-            options: '-Dturboq_reactor_IO_URING=OFF -Dturboq_reactor_SSL=OFF -Dturboq_reactor_XDP=OFF'
-          - variant: 'epoll only (turboq_reactor_IO_URING=OFF)'
+          - variant: 'no liburing, no OpenSSL (dependency-free part only)'
             packages: ''
             options: '-Dturboq_reactor_IO_URING=OFF'
-          - variant: 'system liburing and OpenSSL (turboq_reactor_SYSTEM_*=ON)'
+          - variant: 'epoll only (turboq_reactor_IO_URING=OFF)'
+            packages: 'libssl-dev'
+            options: '-Dturboq_reactor_IO_URING=OFF'
+          - variant: 'system liburing (turboq_reactor_SYSTEM_LIBURING=ON)'
             packages: 'liburing-dev pkg-config libssl-dev'
-            options: '-Dturboq_reactor_IO_URING=ON -Dturboq_reactor_SYSTEM_LIBURING=ON -Dturboq_reactor_SYSTEM_OPENSSL=ON'
+            options: '-Dturboq_reactor_IO_URING=ON -Dturboq_reactor_SYSTEM_LIBURING=ON'
 
     steps:
       - uses: actions/checkout@v7

@@ -123,7 +123,7 @@ void runServer(std::uint16_t port, std::size_t size) {
 }
 
 template <typename Backend>
-void runReactorClient(std::string const& host, std::uint16_t port, std::size_t size, std::uint64_t count,
+void runReactorClient(std::string const& host, std::uint16_t port, std::size_t size, std::size_t count,
     std::uint64_t warmup, typename Backend::Options const& reactorOptions, bool directSend) {
     Reactor<Backend> reactor{reactorOptions};
     auto endpoints = resolve(host, port);
@@ -168,7 +168,7 @@ void runReactorClient(std::string const& host, std::uint16_t port, std::size_t s
 }
 
 void runBaselineClient(
-    std::string const& host, std::uint16_t port, std::size_t size, std::uint64_t count, std::uint64_t warmup) {
+    std::string const& host, std::uint16_t port, std::size_t size, std::size_t count, std::uint64_t warmup) {
     int const fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     int one = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
@@ -221,7 +221,7 @@ auto main(int argc, char** argv) -> int {
             ("host", "server address (client roles)", cxxopts::value<std::string>()->default_value("127.0.0.1"))
             ("p,port", "server port", cxxopts::value<std::uint16_t>()->default_value("9000"))
             ("s,size", "message size in bytes", cxxopts::value<std::size_t>()->default_value("64"))
-            ("c,count", "measured round trips", cxxopts::value<std::uint64_t>()->default_value("100000"))
+            ("c,count", "measured round trips", cxxopts::value<std::size_t>()->default_value("100000"))
             ("w,warmup", "round trips before measuring", cxxopts::value<std::uint64_t>()->default_value("10000"))
             ("backend", "[reactor] io_uring (if built) or epoll", cxxopts::value<std::string>()->default_value(kDefaultBackend))
             ("taskrun", "[reactor/io_uring] interrupt, cooperative or deferred", cxxopts::value<std::string>()->default_value("deferred"))
@@ -241,7 +241,7 @@ auto main(int argc, char** argv) -> int {
         auto const host = args["host"].as<std::string>();
         auto const port = args["port"].as<std::uint16_t>();
         auto const size = std::max<std::size_t>(args["size"].as<std::size_t>(), 1);
-        auto const count = args["count"].as<std::uint64_t>();
+        auto const count = args["count"].as<std::size_t>();
         auto const warmup = args["warmup"].as<std::uint64_t>();
 
         pinToCpu(args["cpu"].as<int>());
