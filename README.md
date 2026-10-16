@@ -25,7 +25,8 @@ whole program) to make io_uring the default, or name the backend: `Reactor<IoUri
 
 ## Requirements
 
-Linux 6.1+, a C++23 compiler (GCC 14+, Clang 20+), CMake 3.24+. For kernel TLS:
+Linux 6.1+ (also the kernel headers to build against), glibc 2.35+, a C++23 compiler (GCC 15+,
+Clang 20+ with libstdc++ 15+), CMake 3.24+. For kernel TLS:
 `sudo modprobe tls` (otherwise TLS runs in OpenSSL in userspace).
 
 ## Integration

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <flat_map>
 #include <span>
 #include <vector>
 
@@ -76,7 +77,6 @@ private:
     };
 
     struct Timer {
-        std::chrono::steady_clock::time_point deadline;
         detail::IoHandler* handler;
         detail::OpCode op; // Timer, or the operation (Connect, Poll) it limits
         int fd;
@@ -90,7 +90,9 @@ private:
     std::vector<int> sendScratch_;
     std::vector<Completion> completions_;
     std::vector<Completion> delivering_;
-    std::vector<Timer> timers_;
+    // By deadline: the next one to fire is the first. Equal deadlines keep the order they were added.
+    std::flat_multimap<std::chrono::steady_clock::time_point, Timer> timers_;
+    std::vector<Timer> expired_;
 
 public:
     /// Create the epoll instance. Throws std::system_error.

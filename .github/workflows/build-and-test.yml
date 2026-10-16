@@ -15,7 +15,7 @@ jobs:
       matrix:
         build_type: [ 'Debug', 'Release' ]
         os: [ 'ubuntu-24.04' ]
-        compiler: [ 'gcc-14', 'gcc-15', 'gcc-16', 'clang-20', 'clang-21', 'clang-22' ]
+        compiler: [ 'gcc-15', 'gcc-16', 'clang-20', 'clang-21', 'clang-22' ]
 
     steps:
       - uses: actions/checkout@v7
@@ -59,18 +59,6 @@ jobs:
             COMMAND chmod +x ninja
             COMMAND chmod +x ${cmake_dir}/cmake
           )
-
-      - name: install gcc-14
-        id: install_gcc_14
-        if: matrix.compiler == 'gcc-14'
-        shell: bash
-        working-directory: ${{ env.HOME }}
-        run: |
-          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
-          sudo apt update
-          sudo apt install -y g++-14 gcc-14
-          echo "CC=gcc-14" >> $GITHUB_ENV
-          echo "CXX=g++-14" >> $GITHUB_ENV
 
       - name: install gcc-15
         id: install_gcc_15
@@ -117,6 +105,10 @@ jobs:
           curl -O -L https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 20
+          # clang uses the newest installed libstdc++: 15+ is needed for <flat_map>
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt update
+          sudo apt install -y g++-15
           echo "CC=clang-20" >> $GITHUB_ENV
           echo "CXX=clang++-20" >> $GITHUB_ENV
 
@@ -129,6 +121,10 @@ jobs:
           curl -O -L https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 21
+          # clang uses the newest installed libstdc++: 15+ is needed for <flat_map>
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt update
+          sudo apt install -y g++-15
           echo "CC=clang-21" >> $GITHUB_ENV
           echo "CXX=clang++-21" >> $GITHUB_ENV
 
@@ -141,6 +137,10 @@ jobs:
           curl -O -L https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
+          # clang uses the newest installed libstdc++: 15+ is needed for <flat_map>
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt update
+          sudo apt install -y g++-15
           echo "CC=clang-22" >> $GITHUB_ENV
           echo "CXX=clang++-22" >> $GITHUB_ENV
 
@@ -216,7 +216,7 @@ jobs:
         # a particular compiler minor version, so one representative each of GCC and Clang gives
         # most of the value for a fraction of the CI time.
         sanitizer: [ 'asan-ubsan-lsan' ]
-        compiler: [ 'gcc-14', 'clang-20' ]
+        compiler: [ 'gcc-15', 'clang-20' ]
 
     steps:
       - uses: actions/checkout@v7
@@ -258,15 +258,15 @@ jobs:
             COMMAND chmod +x ${cmake_dir}/cmake
           )
 
-      - name: install gcc-14
-        if: matrix.compiler == 'gcc-14'
+      - name: install gcc-15
+        if: matrix.compiler == 'gcc-15'
         shell: bash
         run: |
           sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
           sudo apt update
-          sudo apt install -y g++-14 gcc-14
-          echo "CC=gcc-14" >> $GITHUB_ENV
-          echo "CXX=g++-14" >> $GITHUB_ENV
+          sudo apt install -y g++-15 gcc-15
+          echo "CC=gcc-15" >> $GITHUB_ENV
+          echo "CXX=g++-15" >> $GITHUB_ENV
 
       - name: install clang-20
         if: matrix.compiler == 'clang-20'
@@ -275,6 +275,10 @@ jobs:
           curl -O -L https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 20
+          # clang uses the newest installed libstdc++: 15+ is needed for <flat_map>
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt update
+          sudo apt install -y g++-15
           echo "CC=clang-20" >> $GITHUB_ENV
           echo "CXX=clang++-20" >> $GITHUB_ENV
 
@@ -371,15 +375,16 @@ jobs:
       - name: install compiler and dependencies
         shell: bash
         run: |
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
           sudo apt update
-          sudo apt install -y g++-14 gcc-14 ninja-build ${{ matrix.packages }}
+          sudo apt install -y g++-15 gcc-15 ninja-build ${{ matrix.packages }}
           sudo modprobe tls || echo "tls kernel module is not available"
 
       - name: configure
         shell: bash
         run: |
           cmake -S . -B build -G Ninja \
-            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_C_COMPILER=gcc-15 -DCMAKE_CXX_COMPILER=g++-15 \
             -DCMAKE_BUILD_TYPE=Debug -Dturboq_reactor_WERROR=ON ${{ matrix.options }}
 
       - name: build

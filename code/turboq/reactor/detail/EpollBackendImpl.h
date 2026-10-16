@@ -336,37 +336,38 @@ inline void EpollBackend::addTimer(
     if (!timeout) {
         return; // no time limit
     }
-    timers_.push_back({std::chrono::steady_clock::now() + detail::epoll::toDuration(timeout), handler, op, fd});
+    timers_.emplace(std::chrono::steady_clock::now() + detail::epoll::toDuration(timeout), Timer{handler, op, fd});
+    expired_.reserve(timers_.size()); // fireTimers() doesn't allocate
 }
 
 inline void EpollBackend::removeTimer(detail::OpCode op, int fd) noexcept {
-    std::erase_if(timers_, [&](Timer const& timer) {
-        return timer.op == op && timer.fd == fd;
+    std::erase_if(timers_, [&](auto const& entry) {
+        return entry.second.op == op && entry.second.fd == fd;
     });
 }
 
 inline auto EpollBackend::nextTimerIn() const noexcept -> std::chrono::nanoseconds {
-    auto earliest = timers_.front().deadline;
-    for (auto const& timer : timers_) {
-        earliest = std::min(earliest, timer.deadline);
-    }
-    return std::max(std::chrono::nanoseconds::zero(),
-        std::chrono::duration_cast<std::chrono::nanoseconds>(earliest - std::chrono::steady_clock::now()));
+    return std::max(std::chrono::nanoseconds::zero(), std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                          timers_.keys().front() - std::chrono::steady_clock::now()));
 }
 
 inline auto EpollBackend::fireTimers() noexcept -> std::size_t {
-    auto const now = std::chrono::steady_clock::now();
+    // The expired timers are the ones up to the first with a later deadline. They are taken out
+    // before any handler runs: handlers may add or remove timers.
+    auto const end = timers_.upper_bound(std::chrono::steady_clock::now());
+    if (end == timers_.begin()) {
+        return 0;
+    }
+    expired_.clear();
+    for (auto it = timers_.begin(); it != end; ++it) {
+        expired_.push_back(it->second);
+    }
+    timers_.erase(timers_.begin(), end);
+
     std::size_t count = 0;
-    // Expired timers are taken out first: handlers may add or remove timers.
-    std::vector<Timer> expired;
-    std::erase_if(timers_, [&](Timer const& timer) {
-        if (timer.deadline > now) {
-            return false;
-        }
-        expired.push_back(timer);
-        return true;
-    });
-    for (auto const& timer : expired) {
+    // By index, on a copy: a handler adding a timer may reallocate expired_.
+    for (std::size_t i = 0; i < expired_.size(); ++i) {
+        auto const timer = expired_[i];
         if (timer.op == detail::OpCode::Timer) {
             timer.handler->onCompletion(detail::OpCode::Timer, -ETIME, 0);
             ++count;
@@ -514,8 +515,8 @@ inline auto EpollBackend::timer(detail::IoHandler* handler, __kernel_timespec co
 }
 
 inline void EpollBackend::cancelTimer(detail::IoHandler* handler) noexcept {
-    auto const removed = std::erase_if(timers_, [&](Timer const& timer) {
-        return timer.op == detail::OpCode::Timer && timer.handler == handler;
+    auto const removed = std::erase_if(timers_, [&](auto const& entry) {
+        return entry.second.op == detail::OpCode::Timer && entry.second.handler == handler;
     });
     for (std::size_t i = 0; i < removed; ++i) {
         this->queue(handler, detail::OpCode::Timer, -ECANCELED);

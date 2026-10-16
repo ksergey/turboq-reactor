@@ -23,6 +23,12 @@
 
 #include <turboq/reactor/Error.h>
 
+// Device-bound XDP programs (kernel headers 6.3+; the value is kernel ABI). Kernels without them
+// reject the program, and the plain one without timestamps is used.
+#ifndef BPF_F_XDP_DEV_BOUND_ONLY
+#define BPF_F_XDP_DEV_BOUND_ONLY (1U << 6)
+#endif
+
 namespace turboq::reactor::detail {
 namespace xdp {
 

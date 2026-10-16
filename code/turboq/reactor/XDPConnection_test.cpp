@@ -66,7 +66,9 @@ public:
     void append(void const* data, std::size_t size) {
         auto const at = NLMSG_ALIGN(header()->nlmsg_len);
         REQUIRE(at + size <= buffer_.size());
-        std::memcpy(buffer_.data() + at, data, size);
+        if (size != 0) { // memcpy with a null pointer is undefined even for 0 bytes (nested attributes)
+            std::memcpy(buffer_.data() + at, data, size);
+        }
         header()->nlmsg_len = static_cast<std::uint32_t>(at + size);
     }
 
