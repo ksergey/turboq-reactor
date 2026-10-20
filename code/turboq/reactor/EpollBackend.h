@@ -25,6 +25,10 @@ namespace turboq::reactor {
 struct EpollOptions {
     /// Events taken from the kernel per epoll_wait().
     unsigned maxEvents = 256;
+    /// Highest file descriptor number + 1 the backend can work with. fd numbers are shared by the
+    /// whole process (logs, other reactors, ...), so this is not the number of connections.
+    /// Everything is allocated by the constructor: operations on higher fds return false.
+    unsigned maxFds = 1024;
 };
 
 /// Reactor backend on epoll (readiness based), for systems where io_uring is not available
@@ -126,7 +130,10 @@ public:
 private:
     auto run(std::chrono::nanoseconds timeout) -> std::size_t;
 
-    [[nodiscard]] auto state(int fd) -> FdState&;
+    [[nodiscard]] auto state(int fd) noexcept -> FdState*;
+    [[nodiscard]] auto canQueue(std::size_t count) const noexcept -> bool {
+        return completions_.capacity() - completions_.size() >= count;
+    }
     void markDirty(int fd) noexcept;
     void applyInterest() noexcept;
     void attemptSends() noexcept;
@@ -135,11 +142,13 @@ private:
     auto fireTimers() noexcept -> std::size_t;
     [[nodiscard]] auto nextTimerIn() const noexcept -> std::chrono::nanoseconds;
 
-    void queue(detail::IoHandler* handler, detail::OpCode op, std::int32_t res, std::uint32_t flags = 0) {
+    /// Callers make sure there is room (canQueue()): completions_ never grows.
+    void queue(detail::IoHandler* handler, detail::OpCode op, std::int32_t res, std::uint32_t flags = 0) noexcept {
         completions_.push_back({handler, op, res, flags});
     }
 
-    void addTimer(detail::IoHandler* handler, detail::OpCode op, int fd, __kernel_timespec const* timeout);
+    [[nodiscard]] auto addTimer(
+        detail::IoHandler* handler, detail::OpCode op, int fd, __kernel_timespec const* timeout) noexcept -> bool;
     void removeTimer(detail::OpCode op, int fd) noexcept;
 
     auto doRecv(int fd) noexcept -> std::size_t;

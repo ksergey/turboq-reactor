@@ -1,6 +1,7 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <system_error>
 #include <type_traits>
 
 #include <doctest/doctest.h>
@@ -47,6 +48,15 @@ TEST_SUITE("Reactor") {
         REQUIRE_EQ(tcp.state(), ConnectionState::Idle);
     }
 #endif
+
+    TEST_CASE("epoll backend: fds from EpollOptions::maxFds on are refused") {
+        REQUIRE_THROWS_AS(Reactor<EpollBackend>{{.maxFds = 0}}, std::system_error);
+
+        // Any new socket gets an fd above 0, 1, 2.
+        Reactor<EpollBackend> reactor{{.maxFds = 3}};
+        UDPConnection udp{reactor, {}};
+        REQUIRE_FALSE(udp.open());
+    }
 
     TEST_CASE("connection handles own their core: movable, not copyable") {
         auto const check = []<typename Connection>(std::type_identity<Connection>) {

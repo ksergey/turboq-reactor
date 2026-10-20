@@ -24,6 +24,11 @@ namespace detail::epoll {
 /// (level-triggered: the rest comes with the next poll).
 inline constexpr int kMaxDatagramsPerEvent = 64;
 
+/// Capacity per fd slot of the timers (Connect and Poll limits, the handler's own timer) and of
+/// the queued completions (each pending operation ends with one, cancel() adds its own).
+inline constexpr std::size_t kTimersPerFd = 3;
+inline constexpr std::size_t kCompletionsPerFd = 8;
+
 [[nodiscard]] inline auto realtimeNow() noexcept -> Timestamp {
     timespec ts;
     ::clock_gettime(CLOCK_REALTIME, &ts);
@@ -41,15 +46,29 @@ inline constexpr int kMaxDatagramsPerEvent = 64;
 } // namespace detail::epoll
 
 inline EpollBackend::EpollBackend(Options const& options) {
-    if (options.maxEvents == 0) {
+    if (options.maxEvents == 0 || options.maxFds == 0) {
         throw std::system_error{makeErrorCode(Error::InvalidOptions), "EpollBackend"};
     }
+    // Everything is allocated here, before the epoll fd (nothing to clean up if it throws):
+    // operations never allocate, they return false when full.
+    std::size_t const maxFds = options.maxFds;
+    events_.resize(options.maxEvents);
+    fds_.resize(maxFds);
+    dirty_.reserve(maxFds);     // an fd is listed at most once (FdState::dirty)
+    sendQueue_.reserve(maxFds); // likewise (FdState::sendQueued)
+    sendScratch_.reserve(maxFds);
+    completions_.reserve(maxFds * detail::epoll::kCompletionsPerFd);
+    delivering_.reserve(maxFds * detail::epoll::kCompletionsPerFd);
+    std::vector<std::chrono::steady_clock::time_point> deadlines;
+    std::vector<Timer> timers;
+    deadlines.reserve(maxFds * detail::epoll::kTimersPerFd);
+    timers.reserve(maxFds * detail::epoll::kTimersPerFd);
+    timers_.replace(std::move(deadlines), std::move(timers));
+    expired_.reserve(maxFds * detail::epoll::kTimersPerFd);
     epollFd_ = ::epoll_create1(EPOLL_CLOEXEC);
     if (epollFd_ < 0) {
         throw std::system_error{makePosixErrorCode(errno), "epoll_create1"};
     }
-    events_.resize(options.maxEvents);
-    fds_.resize(1024);
 }
 
 inline EpollBackend::~EpollBackend() noexcept {
@@ -57,11 +76,11 @@ inline EpollBackend::~EpollBackend() noexcept {
     ::close(epollFd_);
 }
 
-inline auto EpollBackend::state(int fd) -> FdState& {
-    if (static_cast<std::size_t>(fd) >= fds_.size()) [[unlikely]] {
-        fds_.resize(std::max<std::size_t>(fds_.size() * 2, static_cast<std::size_t>(fd) + 1));
+inline auto EpollBackend::state(int fd) noexcept -> FdState* {
+    if (fd < 0 || static_cast<std::size_t>(fd) >= fds_.size()) [[unlikely]] {
+        return nullptr; // above EpollOptions::maxFds
     }
-    return fds_[static_cast<std::size_t>(fd)];
+    return &fds_[static_cast<std::size_t>(fd)];
 }
 
 inline void EpollBackend::markDirty(int fd) noexcept {
@@ -331,13 +350,16 @@ inline void EpollBackend::attemptSends() noexcept {
 
 // Timers.
 
-inline void EpollBackend::addTimer(
-    detail::IoHandler* handler, detail::OpCode op, int fd, __kernel_timespec const* timeout) {
+inline auto EpollBackend::addTimer(
+    detail::IoHandler* handler, detail::OpCode op, int fd, __kernel_timespec const* timeout) noexcept -> bool {
     if (!timeout) {
-        return; // no time limit
+        return true; // no time limit
+    }
+    if (timers_.size() == timers_.keys().capacity()) [[unlikely]] {
+        return false;
     }
     timers_.emplace(std::chrono::steady_clock::now() + detail::epoll::toDuration(timeout), Timer{handler, op, fd});
-    expired_.reserve(timers_.size()); // fireTimers() doesn't allocate
+    return true;
 }
 
 inline void EpollBackend::removeTimer(detail::OpCode op, int fd) noexcept {
@@ -365,9 +387,7 @@ inline auto EpollBackend::fireTimers() noexcept -> std::size_t {
     timers_.erase(timers_.begin(), end);
 
     std::size_t count = 0;
-    // By index, on a copy: a handler adding a timer may reallocate expired_.
-    for (std::size_t i = 0; i < expired_.size(); ++i) {
-        auto const timer = expired_[i];
+    for (auto const& timer : expired_) {
         if (timer.op == detail::OpCode::Timer) {
             timer.handler->onCompletion(detail::OpCode::Timer, -ETIME, 0);
             ++count;
@@ -393,6 +413,10 @@ inline auto EpollBackend::fireTimers() noexcept -> std::size_t {
 
 inline auto EpollBackend::connect(detail::IoHandler* handler, int fd, sockaddr const* address, std::size_t length,
     __kernel_timespec const* timeout) noexcept -> bool {
+    auto* const st = this->state(fd);
+    if (!st || !this->canQueue(1)) [[unlikely]] {
+        return false;
+    }
     int const flags = ::fcntl(fd, F_GETFL);
     if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         this->queue(handler, detail::OpCode::Connect, -errno);
@@ -406,115 +430,106 @@ inline auto EpollBackend::connect(detail::IoHandler* handler, int fd, sockaddr c
         this->queue(handler, detail::OpCode::Connect, -errno);
         return true;
     }
-    try {
-        this->state(fd).connectHandler = handler;
-        this->addTimer(handler, detail::OpCode::Connect, fd, timeout);
-    } catch (...) {
+    if (!this->addTimer(handler, detail::OpCode::Connect, fd, timeout)) [[unlikely]] {
         return false;
     }
+    st->connectHandler = handler;
     this->markDirty(fd);
     return true;
 }
 
 inline auto EpollBackend::pollFd(
     detail::IoHandler* handler, int fd, unsigned events, __kernel_timespec const* timeout) noexcept -> bool {
-    try {
-        auto& st = this->state(fd);
-        st.pollHandler = handler;
-        st.pollEvents = events;
-        this->addTimer(handler, detail::OpCode::Poll, fd, timeout);
-    } catch (...) {
+    auto* const st = this->state(fd);
+    if (!st || !this->addTimer(handler, detail::OpCode::Poll, fd, timeout)) [[unlikely]] {
         return false;
     }
+    st->pollHandler = handler;
+    st->pollEvents = events;
     this->markDirty(fd);
     return true;
 }
 
 inline auto EpollBackend::recv(detail::IoHandler* handler, int fd, std::span<std::byte> buffer) noexcept -> bool {
-    try {
-        auto& st = this->state(fd);
-        st.recvHandler = handler;
-        st.recvKind = RecvKind::Recv;
-        st.recvBuffer = buffer;
-    } catch (...) {
+    auto* const st = this->state(fd);
+    if (!st) [[unlikely]] {
         return false;
     }
+    st->recvHandler = handler;
+    st->recvKind = RecvKind::Recv;
+    st->recvBuffer = buffer;
     this->markDirty(fd);
     return true;
 }
 
 inline auto EpollBackend::recvMsg(detail::IoHandler* handler, int fd, msghdr* message) noexcept -> bool {
-    try {
-        auto& st = this->state(fd);
-        st.recvHandler = handler;
-        st.recvKind = RecvKind::RecvMsg;
-        st.recvMessage = message;
-    } catch (...) {
+    auto* const st = this->state(fd);
+    if (!st) [[unlikely]] {
         return false;
     }
+    st->recvHandler = handler;
+    st->recvKind = RecvKind::RecvMsg;
+    st->recvMessage = message;
     this->markDirty(fd);
     return true;
 }
 
 inline auto EpollBackend::recvMultishot(
     detail::IoHandler* handler, int fd, msghdr const* layout, BufferPool& pool) noexcept -> bool {
-    try {
-        auto& st = this->state(fd);
-        st.recvHandler = handler;
-        st.recvKind = RecvKind::Multishot;
-        st.layout = layout;
-        st.pool = &pool;
-    } catch (...) {
+    auto* const st = this->state(fd);
+    if (!st) [[unlikely]] {
         return false;
     }
+    st->recvHandler = handler;
+    st->recvKind = RecvKind::Multishot;
+    st->layout = layout;
+    st->pool = &pool;
     this->markDirty(fd);
     return true;
 }
 
 inline auto EpollBackend::send(detail::IoHandler* handler, int fd, std::span<std::byte const> data) noexcept -> bool {
-    try {
-        auto& st = this->state(fd);
-        st.sendHandler = handler;
-        st.sendKind = SendKind::Send;
-        st.sendData = data;
-        st.sendWaiting = false;
-        if (!st.sendQueued) {
-            st.sendQueued = true;
-            sendQueue_.push_back(fd);
-        }
-    } catch (...) {
+    auto* const st = this->state(fd);
+    if (!st) [[unlikely]] {
         return false;
+    }
+    st->sendHandler = handler;
+    st->sendKind = SendKind::Send;
+    st->sendData = data;
+    st->sendWaiting = false;
+    if (!st->sendQueued) {
+        st->sendQueued = true;
+        sendQueue_.push_back(fd);
     }
     return true;
 }
 
 inline auto EpollBackend::sendMsg(detail::IoHandler* handler, int fd, msghdr const* message) noexcept -> bool {
-    try {
-        auto& st = this->state(fd);
-        st.sendHandler = handler;
-        st.sendKind = SendKind::SendMsg;
-        st.sendMessage = message;
-        st.sendWaiting = false;
-        if (!st.sendQueued) {
-            st.sendQueued = true;
-            sendQueue_.push_back(fd);
-        }
-    } catch (...) {
+    auto* const st = this->state(fd);
+    if (!st) [[unlikely]] {
         return false;
+    }
+    st->sendHandler = handler;
+    st->sendKind = SendKind::SendMsg;
+    st->sendMessage = message;
+    st->sendWaiting = false;
+    if (!st->sendQueued) {
+        st->sendQueued = true;
+        sendQueue_.push_back(fd);
     }
     return true;
 }
 
 inline auto EpollBackend::timer(detail::IoHandler* handler, __kernel_timespec const* timeout) noexcept -> bool {
-    try {
-        this->addTimer(handler, detail::OpCode::Timer, -1, timeout);
-    } catch (...) {
-        return false;
-    }
-    return true;
+    return this->addTimer(handler, detail::OpCode::Timer, -1, timeout);
 }
 
 inline void EpollBackend::cancelTimer(detail::IoHandler* handler) noexcept {
+    // One timer per handler. No room for its completion: it stays and fires (as with io_uring
+    // when there is no SQE for the removal).
+    if (!this->canQueue(1)) [[unlikely]] {
+        return;
+    }
     auto const removed = std::erase_if(timers_, [&](auto const& entry) {
         return entry.second.op == detail::OpCode::Timer && entry.second.handler == handler;
     });
@@ -524,33 +539,32 @@ inline void EpollBackend::cancelTimer(detail::IoHandler* handler) noexcept {
 }
 
 inline auto EpollBackend::cancel(detail::IoHandler* handler, int fd) noexcept -> bool {
-    try {
-        auto& st = this->state(fd);
-        if (st.connectHandler == handler) {
-            st.connectHandler = nullptr;
-            this->removeTimer(detail::OpCode::Connect, fd);
-            this->queue(handler, detail::OpCode::Connect, -ECANCELED);
-        }
-        if (st.pollHandler == handler) {
-            st.pollHandler = nullptr;
-            this->removeTimer(detail::OpCode::Poll, fd);
-            this->queue(handler, detail::OpCode::Poll, -ECANCELED);
-        }
-        if (st.recvHandler == handler) {
-            st.recvHandler = nullptr;
-            st.recvKind = RecvKind::None;
-            this->queue(handler, detail::OpCode::Recv, -ECANCELED); // multishot: final, no kCompletionMore
-        }
-        if (st.sendHandler == handler) {
-            st.sendHandler = nullptr;
-            st.sendKind = SendKind::None;
-            st.sendWaiting = false;
-            this->queue(handler, detail::OpCode::Send, -ECANCELED);
-        }
-        this->queue(handler, detail::OpCode::Cancel, 0);
-    } catch (...) {
+    auto* const st = this->state(fd);
+    if (!st || !this->canQueue(5)) [[unlikely]] { // up to four operations and the cancel itself
         return false;
     }
+    if (st->connectHandler == handler) {
+        st->connectHandler = nullptr;
+        this->removeTimer(detail::OpCode::Connect, fd);
+        this->queue(handler, detail::OpCode::Connect, -ECANCELED);
+    }
+    if (st->pollHandler == handler) {
+        st->pollHandler = nullptr;
+        this->removeTimer(detail::OpCode::Poll, fd);
+        this->queue(handler, detail::OpCode::Poll, -ECANCELED);
+    }
+    if (st->recvHandler == handler) {
+        st->recvHandler = nullptr;
+        st->recvKind = RecvKind::None;
+        this->queue(handler, detail::OpCode::Recv, -ECANCELED); // multishot: final, no kCompletionMore
+    }
+    if (st->sendHandler == handler) {
+        st->sendHandler = nullptr;
+        st->sendKind = SendKind::None;
+        st->sendWaiting = false;
+        this->queue(handler, detail::OpCode::Send, -ECANCELED);
+    }
+    this->queue(handler, detail::OpCode::Cancel, 0);
     this->markDirty(fd);
     return true;
 }
