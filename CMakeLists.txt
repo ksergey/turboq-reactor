@@ -3,9 +3,9 @@ cmake_minimum_required(VERSION 3.24)
 project(turboq-reactor CXX)
 
 option(turboq_reactor_SANITIZER "Build with sanitizer" OFF)
-option(turboq_reactor_BUILD_TESTS "Build tests (*_test.cpp files, linked against doctest)" ON)
-option(turboq_reactor_TOOLS "Build tools (requires cxxopts, fetched via CPM)" ON)
-option(turboq_reactor_EXAMPLES "Build examples (requires cxxopts, fetched via CPM)" ON)
+option(turboq_reactor_BUILD_TESTS "Build tests (*_test.cpp files, linked against doctest)" ${PROJECT_IS_TOP_LEVEL})
+option(turboq_reactor_TOOLS "Build tools (requires cxxopts, fetched via CPM)" ${PROJECT_IS_TOP_LEVEL})
+option(turboq_reactor_EXAMPLES "Build examples (requires cxxopts, fetched via CPM)" ${PROJECT_IS_TOP_LEVEL})
 option(turboq_reactor_WERROR "Treat warnings as errors in this project's code (CI)" OFF)
 # The library is header-only and needs turboq only. Tests, tools and examples also use io_uring
 # (liburing) and TLS (OpenSSL) when available; these options only apply to them.
