@@ -28,7 +28,7 @@ enum class KernelTlsOffload : std::uint8_t { None, SendOnly, ReceiveOnly, Full }
 
 struct TLSOptions {
     /// SNI and the host name the certificate is verified against. None (or a numeric address):
-    /// no SNI, the certificate must list the IP address (TCPOptions::endpoint) in its SANs.
+    /// no SNI, the certificate must list the IP address (TcpOptions::endpoint) in its SANs.
     std::optional<std::string> serverName{};
     bool verifyPeer = true;
     /// Trusted CAs (PEM file, hashed directory). Both none: the system default store.

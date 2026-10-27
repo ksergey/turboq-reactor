@@ -126,7 +126,7 @@ TEST_SUITE("Lifetime") {
         Reactor reactor;
         int peer = -1;
         {
-            TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
+            TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
             REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
@@ -145,7 +145,7 @@ TEST_SUITE("Lifetime") {
         Listener listener;
         Reactor reactor;
         {
-            TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
+            TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
             REQUIRE(conn.connect()); // connect + linked timeout queued, not submitted yet
         }
         REQUIRE_EQ(reactor.retiredCount(), 1);
@@ -157,8 +157,8 @@ TEST_SUITE("Lifetime") {
     TEST_CASE("never connected connection is deleted right away") {
         Reactor reactor;
         {
-            TCPConnection tcp{reactor, {.endpoint = {IPv4Address::loopback(), 1}}};
-            UDPConnection udp{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
+            TcpConnection tcp{reactor, {.endpoint = {IPv4Address::loopback(), 1}}};
+            UdpConnection udp{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
         }
         REQUIRE_EQ(reactor.retiredCount(), 0);
     }
@@ -167,7 +167,7 @@ TEST_SUITE("Lifetime") {
         Listener listener;
         Reactor reactor;
         {
-            TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}, .directSend = false}};
+            TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}, .directSend = false}};
             REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
@@ -187,9 +187,9 @@ TEST_SUITE("Lifetime") {
         for (int round = 0; round < 3; ++round) {
             CAPTURE(round);
             {
-                UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 64}};
+                UdpConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 64}};
                 REQUIRE(conn.open());
-                UDPConnection sender{
+                UdpConnection sender{
                     reactor, {.local = Endpoint{IPv4Address::loopback()},
                                  .remote = Endpoint{IPv4Address::loopback(), conn.localEndpoint().port}}};
                 REQUIRE(sender.open());
@@ -205,7 +205,7 @@ TEST_SUITE("Lifetime") {
         }
         // Buffer groups were unregistered and recycled: many sequential sockets do not run out.
         for (int i = 0; i < 100; ++i) {
-            UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 1}};
+            UdpConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 1}};
             REQUIRE(conn.open());
             conn.close();
             REQUIRE(pollUntil(reactor, [&] {
@@ -264,11 +264,11 @@ TEST_SUITE("Lifetime") {
     TEST_CASE("connections can be moved and kept in containers") {
         Listener listener;
         Reactor reactor;
-        std::vector<TCPConnection> connections;
+        std::vector<TcpConnection> connections;
         constexpr int kCount = 16;
         for (int i = 0; i < kCount; ++i) {
             // Reallocations move the handles while connects are in flight.
-            connections.emplace_back(reactor, TCPOptions{.endpoint = {IPv4Address::loopback(), listener.port()}});
+            connections.emplace_back(reactor, TcpOptions{.endpoint = {IPv4Address::loopback(), listener.port()}});
             REQUIRE(connections.back().connect());
         }
         REQUIRE(pollUntil(reactor, [&] {
@@ -317,8 +317,8 @@ TEST_SUITE("Lifetime") {
 
     TEST_CASE("a user class owns its connections") {
         struct Connector {
-            UDPConnection lineA;
-            UDPConnection lineB;
+            UdpConnection lineA;
+            UdpConnection lineB;
 
             explicit Connector(Reactor& reactor)
                 : lineA{reactor, {.local = Endpoint{IPv4Address::loopback()}}},
@@ -339,8 +339,8 @@ TEST_SUITE("Lifetime") {
     TEST_CASE("reactor destroyed before its connections") {
         Listener listener;
         auto reactor = std::make_unique<Reactor>();
-        TCPConnection tcp{*reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
-        UDPConnection udp{*reactor, {.local = Endpoint{IPv4Address::loopback()}}};
+        TcpConnection tcp{*reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
+        UdpConnection udp{*reactor, {.local = Endpoint{IPv4Address::loopback()}}};
         REQUIRE(tcp.connect());
         REQUIRE(udp.open());
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)

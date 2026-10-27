@@ -23,7 +23,7 @@
 
 #include <turboq/Utils.h>
 #include <turboq-reactor/Reactor.h>
-#include <turboq-reactor/UDPConnection.h>
+#include <turboq-reactor/UdpConnection.h>
 
 namespace {
 
@@ -90,9 +90,9 @@ template <typename T>
 
 template <typename Backend>
 void listen(
-    typename Backend::Options const& reactorOptions, UDPOptions const& udpOptions, std::chrono::seconds duration) {
+    typename Backend::Options const& reactorOptions, UdpOptions const& udpOptions, std::chrono::seconds duration) {
     Reactor<Backend> reactor{reactorOptions};
-    UDPConnection feed{reactor, udpOptions};
+    UdpConnection feed{reactor, udpOptions};
     if (auto result = feed.open(); !result) {
         throw std::runtime_error{"open failed: " + result.error().message()};
     }
@@ -193,7 +193,7 @@ auto main(int argc, char** argv) -> int {
         auto const group = parseOptional("group");
         auto const local = parseOptional("local");
 
-        auto const udpOptions = UDPOptions{
+        auto const udpOptions = UdpOptions{
             .group = group.transform([port](IPAddress const& address) {
                 return Endpoint{address, port};
             }),

@@ -22,7 +22,7 @@ namespace turboq::reactor {
 /// Typical loop:
 ///
 ///   Reactor reactor;
-///   TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), 9000}}};
+///   TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), 9000}}};
 ///   conn.connect();
 ///   while (running) {
 ///       reactor.poll();
@@ -33,8 +33,8 @@ namespace turboq::reactor {
 ///
 /// The same with epoll: Reactor<EpollBackend> reactor; the connection lines stay as they are,
 /// connections take the backend from the reactor they are constructed with (CTAD). Where there is
-/// nothing to deduce from (class members, containers) spell it out: TCPConnection<> is io_uring,
-/// TCPConnection<EpollBackend> is epoll.
+/// nothing to deduce from (class members, containers) spell it out: TcpConnection<> is io_uring,
+/// TcpConnection<EpollBackend> is epoll.
 ///
 /// The reactor never calls user code: poll() only moves data between sockets and the connections'
 /// rx/tx queues and advances connection state machines.

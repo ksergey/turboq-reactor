@@ -28,7 +28,7 @@
 
 namespace turboq::reactor {
 
-struct TCPOptions {
+struct TcpOptions {
     /// Where to connect. For a host name, resolve() it first (blocking, keep it off hot threads).
     Endpoint endpoint{};
     /// Receive ring size. When it is full, the reactor stops reading from the socket and TCP flow
@@ -49,7 +49,7 @@ struct TCPOptions {
 
 namespace detail {
 
-/// Implementation of TCPConnection (see there): a TCP socket between the rx/tx rings. Owned by the
+/// Implementation of TcpConnection (see there): a TCP socket between the rx/tx rings. Owned by the
 /// handle, released through the reactor.
 ///
 /// Also the base of stream layers that sit on the socket (TLSCore). They plug in through a few
@@ -60,14 +60,14 @@ namespace detail {
 ///   startSend(), sendDirect()  per flush() / poll() with committed data
 ///   onCloseRequested(), onClosed(), resetSession()  connection life cycle
 template <typename Backend>
-class TCPCore : public IoHandler {
+class TcpCore : public IoHandler {
 public:
     class Rx {
     private:
-        friend class TCPCore;
-        TCPCore* conn_;
+        friend class TcpCore;
+        TcpCore* conn_;
 
-        explicit Rx(TCPCore* conn) noexcept : conn_{conn} {}
+        explicit Rx(TcpCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// All received and not yet consumed bytes. Empty span if there are none.
@@ -105,10 +105,10 @@ public:
 
     class Tx {
     private:
-        friend class TCPCore;
-        TCPCore* conn_;
+        friend class TcpCore;
+        TcpCore* conn_;
 
-        explicit Tx(TCPCore* conn) noexcept : conn_{conn} {}
+        explicit Tx(TcpCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// Reserve `size` contiguous bytes. Returns an empty span when there is not enough room or
@@ -168,7 +168,7 @@ public:
 
 protected:
     Backend& ring_;
-    TCPOptions options_;
+    TcpOptions options_;
     StreamObserver* observer_{nullptr};
     MirroredBuffer rxBuffer_;
     MirroredBuffer txBuffer_;
@@ -193,20 +193,20 @@ public:
     Rx rx{this};
     Tx tx{this};
 
-    TCPCore(TCPCore const&) = delete;
-    TCPCore& operator=(TCPCore const&) = delete;
+    TcpCore(TcpCore const&) = delete;
+    TcpCore& operator=(TcpCore const&) = delete;
 
-    ~TCPCore() noexcept override;
+    ~TcpCore() noexcept override;
 
     /// Validate options, allocate the rings. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, TCPOptions options) -> std::unique_ptr<TCPCore>;
+    [[nodiscard]] static auto create(Backend& ring, TcpOptions options) -> std::unique_ptr<TcpCore>;
 
     /// Start connecting. Allowed in Idle and Closed states (i.e. this is also "reconnect").
     /// Clears both queues. Synchronous failures (resolution, socket()) are returned and also leave
     /// the connection in Closed state with error() set; asynchronous ones arrive via state().
     auto connect() -> std::expected<void, std::error_code>;
 
-    /// Start closing; see TCPConnection::close().
+    /// Start closing; see TcpConnection::close().
     void close() noexcept;
 
     [[nodiscard]] auto state() const noexcept -> ConnectionState {
@@ -218,7 +218,7 @@ public:
         return error_;
     }
 
-    [[nodiscard]] auto options() const noexcept -> TCPOptions const& {
+    [[nodiscard]] auto options() const noexcept -> TcpOptions const& {
         return options_;
     }
 
@@ -240,10 +240,10 @@ public:
     }
 
 protected:
-    TCPCore(Backend& ring, TCPOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept;
+    TcpCore(Backend& ring, TcpOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept;
 
     /// Throws std::system_error for options no TCP connection can work with.
-    static void validate(TCPOptions const& options);
+    static void validate(TcpOptions const& options);
     [[nodiscard]] static auto allocateRing(std::size_t size, char const* what) -> MirroredBuffer;
 
     void onCompletion(OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -317,30 +317,30 @@ protected:
 /// Not thread-safe: use a connection only from the thread that polls its reactor.
 /// For TLS see TLSConnection.
 template <typename Backend>
-class TCPConnection {
+class TcpConnection {
 private:
-    detail::CorePtr<detail::TCPCore<Backend>> core_;
+    detail::CorePtr<detail::TcpCore<Backend>> core_;
 
 public:
-    typename detail::TCPCore<Backend>::Rx rx;
-    typename detail::TCPCore<Backend>::Tx tx;
+    typename detail::TcpCore<Backend>::Rx rx;
+    typename detail::TcpCore<Backend>::Tx tx;
 
     /// Create a connection served by `reactor` (which must outlive it). Does not connect: call
     /// connect(). Throws std::system_error on invalid options or if the rings can't be allocated.
-    TCPConnection(Reactor<Backend>& reactor, TCPOptions options);
+    TcpConnection(Reactor<Backend>& reactor, TcpOptions options);
 
-    TCPConnection(TCPConnection const&) = delete;
-    TCPConnection& operator=(TCPConnection const&) = delete;
+    TcpConnection(TcpConnection const&) = delete;
+    TcpConnection& operator=(TcpConnection const&) = delete;
 
     /// Moves the connection, in-flight operations included. The moved-from object may only be
     /// destroyed or assigned to.
-    TCPConnection(TCPConnection&& other) noexcept = default;
+    TcpConnection(TcpConnection&& other) noexcept = default;
 
-    TCPConnection& operator=(TCPConnection&& other) noexcept = default;
+    TcpConnection& operator=(TcpConnection&& other) noexcept = default;
 
     /// Closes the connection if needed. Never blocks: when operations are still in flight the
     /// reactor finishes them and frees the connection's memory in a later poll().
-    ~TCPConnection() noexcept = default;
+    ~TcpConnection() noexcept = default;
 
     /// Start connecting. Allowed in Idle and Closed states (i.e. this is also "reconnect").
     /// Clears both queues. Synchronous failures (resolution, socket()) are returned and also leave
@@ -365,7 +365,7 @@ public:
         return core_->error();
     }
 
-    [[nodiscard]] auto options() const noexcept -> TCPOptions const& {
+    [[nodiscard]] auto options() const noexcept -> TcpOptions const& {
         return core_->options();
     }
 
@@ -378,4 +378,4 @@ public:
 
 } // namespace turboq::reactor
 
-#include <turboq-reactor/detail/TCPConnectionImpl.h>
+#include <turboq-reactor/detail/TcpConnectionImpl.h>

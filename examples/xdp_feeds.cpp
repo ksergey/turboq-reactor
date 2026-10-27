@@ -33,7 +33,7 @@
 #include <cxxopts.hpp>
 
 #include <turboq-reactor/Reactor.h>
-#include <turboq-reactor/XDPConnection.h>
+#include <turboq-reactor/XdpConnection.h>
 
 namespace {
 
@@ -158,7 +158,7 @@ auto main(int argc, char** argv) -> int {
             return args.count("help") ? 0 : 1;
         }
 
-        XDPOptions xdp{
+        XdpOptions xdp{
             .interface = args["interface"].as<std::string>(),
             .queue = args["queue"].as<unsigned>(),
             .hardwareTimestamps = args.count("timestamps") != 0,
@@ -178,13 +178,13 @@ auto main(int argc, char** argv) -> int {
             }
         }
         auto const zeroCopy = args["zero-copy"].as<std::string>();
-        xdp.zeroCopy = zeroCopy == "require"   ? XDPZeroCopy::Require
-                       : zeroCopy == "disable" ? XDPZeroCopy::Disable
-                                               : XDPZeroCopy::Prefer;
+        xdp.zeroCopy = zeroCopy == "require"   ? XdpZeroCopy::Require
+                       : zeroCopy == "disable" ? XdpZeroCopy::Disable
+                                               : XdpZeroCopy::Prefer;
         auto const attach = args["attach"].as<std::string>();
-        xdp.attachMode = attach == "native"    ? XDPAttachMode::Native
-                         : attach == "generic" ? XDPAttachMode::Generic
-                                               : XDPAttachMode::Auto;
+        xdp.attachMode = attach == "native"    ? XdpAttachMode::Native
+                         : attach == "generic" ? XdpAttachMode::Generic
+                                               : XdpAttachMode::Auto;
         if (auto const busyPoll = args["busy-poll"].as<unsigned>(); busyPoll != 0) {
             xdp.busyPoll = std::chrono::microseconds{busyPoll};
             xdp.wakeReactor = false; // the loop below spins on rx and never sleeps
@@ -192,7 +192,7 @@ auto main(int argc, char** argv) -> int {
         bool const busyPolling = xdp.busyPoll.has_value();
 
         Reactor reactor;
-        XDPConnection conn{reactor, std::move(xdp)};
+        XdpConnection conn{reactor, std::move(xdp)};
         if (auto result = conn.open(); !result) {
             throw std::runtime_error{std::format("open: {} ({})", result.error().message(), conn.diagnostic())};
         }

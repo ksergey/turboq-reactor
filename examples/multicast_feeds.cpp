@@ -31,7 +31,7 @@
 #include <cxxopts.hpp>
 
 #include <turboq-reactor/Reactor.h>
-#include <turboq-reactor/UDPConnection.h>
+#include <turboq-reactor/UdpConnection.h>
 
 namespace {
 
@@ -85,7 +85,7 @@ void onSignal(int) {
 
 struct Feed {
     std::string name;
-    UDPConnection<> connection;
+    UdpConnection<> connection;
     std::uint64_t datagrams = 0;
 };
 
@@ -149,7 +149,7 @@ auto main(int argc, char** argv) -> int {
             }
             auto const name = std::string(1, static_cast<char>('A' + feeds.size()));
             feeds.push_back(Feed{.name = name,
-                .connection = UDPConnection{reactor, {
+                .connection = UdpConnection{reactor, {
                                                          .group = *group,
                                                          .source = source,
                                                          .interface = interface,

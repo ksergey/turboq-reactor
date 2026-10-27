@@ -15,7 +15,7 @@
 namespace turboq::reactor::detail {
 
 inline constexpr unsigned kMaxXskFrameCount = 1u << 20;
-/// The completion ring is mandatory but only used for transmit, which XDPConnection does not do.
+/// The completion ring is mandatory but only used for transmit, which XdpConnection does not do.
 inline constexpr int kXskCompletionRingSize = 64;
 
 /// bind() an AF_XDP socket; returns the errno (0: success). EBUSY is retried for a while: a socket

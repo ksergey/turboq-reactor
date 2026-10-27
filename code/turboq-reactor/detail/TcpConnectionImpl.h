@@ -1,7 +1,7 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
-// Implementation of TCPConnection.h (templates), included at its end.
+// Implementation of TcpConnection.h (templates), included at its end.
 
 #pragma once
 
@@ -21,14 +21,14 @@ namespace turboq::reactor {
 namespace detail {
 
 template <typename Backend>
-void TCPCore<Backend>::validate(TCPOptions const& options) {
+void TcpCore<Backend>::validate(TcpOptions const& options) {
     if (options.rxBufferSize == 0 || options.txBufferSize == 0) {
-        throw std::system_error{makeErrorCode(Error::InvalidOptions), "TCPConnection"};
+        throw std::system_error{makeErrorCode(Error::InvalidOptions), "TcpConnection"};
     }
 }
 
 template <typename Backend>
-auto TCPCore<Backend>::allocateRing(std::size_t size, char const* what) -> MirroredBuffer {
+auto TcpCore<Backend>::allocateRing(std::size_t size, char const* what) -> MirroredBuffer {
     auto buffer = MirroredBuffer::create({.capacityHint = size});
     if (!buffer) {
         throw std::system_error{buffer.error(), what};
@@ -37,28 +37,28 @@ auto TCPCore<Backend>::allocateRing(std::size_t size, char const* what) -> Mirro
 }
 
 template <typename Backend>
-auto TCPCore<Backend>::create(Backend& ring, TCPOptions options) -> std::unique_ptr<TCPCore> {
+auto TcpCore<Backend>::create(Backend& ring, TcpOptions options) -> std::unique_ptr<TcpCore> {
     validate(options);
     auto rxBuffer = allocateRing(options.rxBufferSize, "MirroredBuffer::create (rx)");
     auto txBuffer = allocateRing(options.txBufferSize, "MirroredBuffer::create (tx)");
-    return std::unique_ptr<TCPCore>{new TCPCore{ring, std::move(options), std::move(rxBuffer), std::move(txBuffer)}};
+    return std::unique_ptr<TcpCore>{new TcpCore{ring, std::move(options), std::move(rxBuffer), std::move(txBuffer)}};
 }
 
 template <typename Backend>
-TCPCore<Backend>::TCPCore(Backend& ring, TCPOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept
+TcpCore<Backend>::TcpCore(Backend& ring, TcpOptions options, MirroredBuffer rxBuffer, MirroredBuffer txBuffer) noexcept
     : ring_{ring}, options_{std::move(options)}, rxBuffer_{std::move(rxBuffer)}, txBuffer_{std::move(txBuffer)} {
     connectTimeout_ = toKernelTimespec(options_.connectTimeout);
 }
 
 template <typename Backend>
-TCPCore<Backend>::~TCPCore() noexcept {
+TcpCore<Backend>::~TcpCore() noexcept {
     if (fd_ >= 0) {
         ::close(fd_);
     }
 }
 
 template <typename Backend>
-auto TCPCore<Backend>::connect() -> std::expected<void, std::error_code> {
+auto TcpCore<Backend>::connect() -> std::expected<void, std::error_code> {
     if (state_ != ConnectionState::Idle && state_ != ConnectionState::Closed) {
         return std::unexpected(makeErrorCode(Error::InvalidState));
     }
@@ -109,7 +109,7 @@ auto TCPCore<Backend>::connect() -> std::expected<void, std::error_code> {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::close() noexcept {
+void TcpCore<Backend>::close() noexcept {
     switch (state_) {
     case ConnectionState::Idle: state_ = ConnectionState::Closed; break;
     case ConnectionState::Connecting: [[fallthrough]];
@@ -125,7 +125,7 @@ void TCPCore<Backend>::close() noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::onCompletion(OpCode op, std::int32_t res, [[maybe_unused]] std::uint32_t flags) noexcept {
+void TcpCore<Backend>::onCompletion(OpCode op, std::int32_t res, [[maybe_unused]] std::uint32_t flags) noexcept {
     assert(inflight_ > 0);
     --inflight_;
 
@@ -171,7 +171,7 @@ void TCPCore<Backend>::onCompletion(OpCode op, std::int32_t res, [[maybe_unused]
 }
 
 template <typename Backend>
-void TCPCore<Backend>::handleRecvResult(std::int32_t res) noexcept {
+void TcpCore<Backend>::handleRecvResult(std::int32_t res) noexcept {
     if (res > 0) [[likely]] {
         rxBuffer_.produce(static_cast<std::size_t>(res));
         rxTimestamp_ = ring_.now();
@@ -193,13 +193,13 @@ void TCPCore<Backend>::handleRecvResult(std::int32_t res) noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::onConnected() noexcept {
+void TcpCore<Backend>::onConnected() noexcept {
     state_ = ConnectionState::Ready;
     this->startStreaming();
 }
 
 template <typename Backend>
-void TCPCore<Backend>::startStreaming() noexcept {
+void TcpCore<Backend>::startStreaming() noexcept {
     this->armRecv();
     // Data committed while connecting goes out right away.
     this->startSend();
@@ -212,7 +212,7 @@ void TCPCore<Backend>::startStreaming() noexcept {
 }
 
 template <typename Backend>
-auto TCPCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<std::error_code> {
+auto TcpCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<std::error_code> {
     if (fd_ >= 0) {
         ::close(fd_);
         fd_ = -1;
@@ -223,7 +223,7 @@ auto TCPCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<
 }
 
 template <typename Backend>
-void TCPCore<Backend>::fail(std::error_code ec) noexcept {
+void TcpCore<Backend>::fail(std::error_code ec) noexcept {
     if (state_ == ConnectionState::Closing || state_ == ConnectionState::Closed) {
         return;
     }
@@ -232,7 +232,7 @@ void TCPCore<Backend>::fail(std::error_code ec) noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::beginClose() noexcept {
+void TcpCore<Backend>::beginClose() noexcept {
     state_ = ConnectionState::Closing;
     prepared_ = 0;
 
@@ -251,7 +251,7 @@ void TCPCore<Backend>::beginClose() noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::finishClose() noexcept {
+void TcpCore<Backend>::finishClose() noexcept {
     this->onClosed();
     if (fd_ >= 0) {
         ring_.forget(fd_);
@@ -267,7 +267,7 @@ void TCPCore<Backend>::finishClose() noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::armRecv() noexcept {
+void TcpCore<Backend>::armRecv() noexcept {
     auto const buffer = rxBuffer_.writable();
     if (buffer.empty()) {
         // Ring is full: stop reading, TCP flow control pushes back on the peer. consume() resumes.
@@ -279,7 +279,7 @@ void TCPCore<Backend>::armRecv() noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::submitRecv(std::span<std::byte> buffer) noexcept {
+void TcpCore<Backend>::submitRecv(std::span<std::byte> buffer) noexcept {
     if (!ring_.recv(this, fd_, buffer)) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
@@ -289,19 +289,19 @@ void TCPCore<Backend>::submitRecv(std::span<std::byte> buffer) noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::resumeRecv() noexcept {
+void TcpCore<Backend>::resumeRecv() noexcept {
     if (state_ == ConnectionState::Ready && !recvInFlight_) {
         this->armRecv();
     }
 }
 
 template <typename Backend>
-void TCPCore<Backend>::onCloseRequested() noexcept {
+void TcpCore<Backend>::onCloseRequested() noexcept {
     this->drainOnClose(txBuffer_);
 }
 
 template <typename Backend>
-void TCPCore<Backend>::drainOnClose(MirroredBuffer& source) noexcept {
+void TcpCore<Backend>::drainOnClose(MirroredBuffer& source) noexcept {
     // Not while an io_uring send is in flight: the rest of the stream belongs after it.
     if (sendInFlight_) {
         return;
@@ -317,7 +317,7 @@ void TCPCore<Backend>::drainOnClose(MirroredBuffer& source) noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::markTxDirty() noexcept {
+void TcpCore<Backend>::markTxDirty() noexcept {
     // While connecting the connect completion starts sending; once closing nothing is sent.
     if (state_ == ConnectionState::Ready) {
         ring_.schedule(this);
@@ -325,12 +325,12 @@ void TCPCore<Backend>::markTxDirty() noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::onTxReady() noexcept {
+void TcpCore<Backend>::onTxReady() noexcept {
     this->startSend();
 }
 
 template <typename Backend>
-void TCPCore<Backend>::flushTx() noexcept {
+void TcpCore<Backend>::flushTx() noexcept {
     if (state_ != ConnectionState::Ready || sendInFlight_) {
         // Not connected yet, or a send is in flight: its completion picks up the new data.
         return;
@@ -345,12 +345,12 @@ void TCPCore<Backend>::flushTx() noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::startSend() noexcept {
+void TcpCore<Backend>::startSend() noexcept {
     this->submitSend(txBuffer_);
 }
 
 template <typename Backend>
-void TCPCore<Backend>::submitSend(MirroredBuffer& source) noexcept {
+void TcpCore<Backend>::submitSend(MirroredBuffer& source) noexcept {
     if (state_ != ConnectionState::Ready || sendInFlight_ || source.empty()) {
         return;
     }
@@ -366,12 +366,12 @@ void TCPCore<Backend>::submitSend(MirroredBuffer& source) noexcept {
 }
 
 template <typename Backend>
-void TCPCore<Backend>::sendDirect() noexcept {
+void TcpCore<Backend>::sendDirect() noexcept {
     this->sendNow(txBuffer_);
 }
 
 template <typename Backend>
-void TCPCore<Backend>::sendNow(MirroredBuffer& source) noexcept {
+void TcpCore<Backend>::sendNow(MirroredBuffer& source) noexcept {
     auto const data = source.readable();
     if (data.empty()) {
         return;
@@ -393,8 +393,8 @@ void TCPCore<Backend>::sendNow(MirroredBuffer& source) noexcept {
 } // namespace detail
 
 template <typename Backend>
-TCPConnection<Backend>::TCPConnection(Reactor<Backend>& reactor, TCPOptions options)
-    : core_{detail::TCPCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
+TcpConnection<Backend>::TcpConnection(Reactor<Backend>& reactor, TcpOptions options)
+    : core_{detail::TcpCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
     reactor.backend().attach(core_.get());
 }
 

@@ -16,7 +16,7 @@ namespace turboq::reactor {
 class IoUringBackend;
 class EpollBackend;
 
-/// The backend of Reactor<>, TCPConnection<>, ...: epoll, or io_uring with TURBOQ_REACTOR_IO_URING=1.
+/// The backend of Reactor<>, TcpConnection<>, ...: epoll, or io_uring with TURBOQ_REACTOR_IO_URING=1.
 #if TURBOQ_REACTOR_IO_URING
 using DefaultBackend = IoUringBackend;
 #else
@@ -26,14 +26,14 @@ using DefaultBackend = EpollBackend;
 template <typename Backend = DefaultBackend>
 class Reactor;
 template <typename Backend = DefaultBackend>
-class TCPConnection;
+class TcpConnection;
 template <typename Backend = DefaultBackend>
 class TLSConnection;
 template <typename Backend = DefaultBackend>
-class UDPConnection;
+class UdpConnection;
 template <typename Backend = DefaultBackend>
 class WebsocketConnection;
 template <typename Backend = DefaultBackend>
-class XDPConnection;
+class XdpConnection;
 
 } // namespace turboq::reactor

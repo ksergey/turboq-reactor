@@ -92,7 +92,7 @@ public:
 
 } // namespace
 
-TEST_SUITE("UDPConnection") {
+TEST_SUITE("UdpConnection") {
 
     TEST_CASE("unicast exchange between two connections") {
         for (auto const& config : kReactorConfigs) {
@@ -101,13 +101,13 @@ TEST_SUITE("UDPConnection") {
                 CAPTURE(directSend);
                 Reactor reactor{config};
 
-                UDPConnection server{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
+                UdpConnection server{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
                 REQUIRE(server.open());
                 REQUIRE_EQ(server.state(), ConnectionState::Ready);
                 REQUIRE_NE(server.localEndpoint().port, 0);
                 REQUIRE(server.tx.prepare(1).empty()); // no destination
 
-                UDPConnection client{
+                UdpConnection client{
                     reactor, {.local = Endpoint{IPv4Address::loopback()},
                                  .remote = Endpoint{IPv4Address::loopback(), server.localEndpoint().port},
                                  .directSend = directSend}};
@@ -161,7 +161,7 @@ TEST_SUITE("UDPConnection") {
 
     TEST_CASE("timestamping can be disabled") {
         Reactor reactor;
-        UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .timestamping = Timestamping::None}};
+        UdpConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .timestamping = Timestamping::None}};
         REQUIRE(conn.open());
         Sender sender{conn.localEndpoint().port};
         sender.send("x");
@@ -174,7 +174,7 @@ TEST_SUITE("UDPConnection") {
 
     TEST_CASE("long datagrams are truncated") {
         Reactor reactor;
-        UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .maxDatagramSize = 64}};
+        UdpConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .maxDatagramSize = 64}};
         REQUIRE(conn.open());
         Sender sender{conn.localEndpoint().port};
         sender.send(std::string(100, 'z'));
@@ -189,7 +189,7 @@ TEST_SUITE("UDPConnection") {
         for (auto const& config : kReactorConfigs) {
             CAPTURE(&config - kReactorConfigs.data());
             Reactor reactor{config};
-            UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 8}};
+            UdpConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 8}};
             REQUIRE(conn.open());
             Sender sender{conn.localEndpoint().port};
 
@@ -221,7 +221,7 @@ TEST_SUITE("UDPConnection") {
 
     TEST_CASE("kernel drops are reported") {
         Reactor reactor;
-        UDPConnection conn{
+        UdpConnection conn{
             reactor, {.local = Endpoint{IPv4Address::loopback()}, .bufferCount = 1, .socketRecvBufferSize = 4096}};
         REQUIRE(conn.open());
         Sender sender{conn.localEndpoint().port};
@@ -250,7 +250,7 @@ TEST_SUITE("UDPConnection") {
 
     TEST_CASE("close keeps received datagrams, open drops them") {
         Reactor reactor;
-        UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
+        UdpConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
         REQUIRE(conn.open());
         auto const port = conn.localEndpoint().port;
         Sender sender{port};
@@ -284,34 +284,34 @@ TEST_SUITE("UDPConnection") {
 
     TEST_CASE("invalid configuration is reported") {
         Reactor reactor;
-        UDPConnection notMulticast{reactor, {.group = Endpoint{IPv4Address{10, 0, 0, 1}, 30000}}};
+        UdpConnection notMulticast{reactor, {.group = Endpoint{IPv4Address{10, 0, 0, 1}, 30000}}};
         REQUIRE_FALSE(notMulticast.open());
         REQUIRE_EQ(notMulticast.state(), ConnectionState::Closed);
         REQUIRE_EQ(notMulticast.error(), makeErrorCode(Error::InvalidOptions));
 
-        UDPConnection sourceWithoutGroup{reactor, {.source = IPv4Address{10, 0, 0, 1}}};
+        UdpConnection sourceWithoutGroup{reactor, {.source = IPv4Address{10, 0, 0, 1}}};
         REQUIRE_FALSE(sourceWithoutGroup.open());
         REQUIRE_EQ(sourceWithoutGroup.error(), makeErrorCode(Error::InvalidOptions));
 
-        UDPConnection badInterface{
+        UdpConnection badInterface{
             reactor, {.group = Endpoint{IPv4Address{239, 1, 1, 1}, 30000}, .interface = "no-such-if0"}};
         REQUIRE_FALSE(badInterface.open());
         REQUIRE_EQ(badInterface.state(), ConnectionState::Closed);
 
-        UDPConnection mixedFamilies{
+        UdpConnection mixedFamilies{
             reactor, {.local = Endpoint{IPv6Address::loopback()}, .remote = Endpoint{IPv4Address::loopback(), 1}}};
         REQUIRE_FALSE(mixedFamilies.open());
         REQUIRE_EQ(mixedFamilies.state(), ConnectionState::Closed);
         REQUIRE_EQ(mixedFamilies.error(), makeErrorCode(Error::InvalidOptions));
 
-        REQUIRE_THROWS_AS(UDPConnection(reactor, {.maxDatagramSize = 0}), std::system_error);
+        REQUIRE_THROWS_AS(UdpConnection(reactor, {.maxDatagramSize = 0}), std::system_error);
     }
 
     TEST_CASE("tx queue depth limits queued datagrams") {
         Reactor reactor;
-        UDPConnection sink{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
+        UdpConnection sink{reactor, {.local = Endpoint{IPv4Address::loopback()}}};
         REQUIRE(sink.open());
-        UDPConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()},
+        UdpConnection conn{reactor, {.local = Endpoint{IPv4Address::loopback()},
                                         .remote = Endpoint{IPv4Address::loopback(), sink.localEndpoint().port},
                                         .txQueueDepth = 4}};
         REQUIRE(conn.open());
@@ -330,9 +330,9 @@ TEST_SUITE("UDPConnection") {
     TEST_CASE("multicast: each socket sees only its own group") {
         Reactor reactor;
         constexpr std::uint16_t kPort = kFixedPortBase + 37;
-        UDPConnection lineA{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 1}, kPort}}};
+        UdpConnection lineA{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 1}, kPort}}};
         auto const openedA = lineA.open();
-        UDPConnection lineB{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 2}, kPort}}};
+        UdpConnection lineB{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 2}, kPort}}};
         auto const openedB = lineB.open();
         if (!openedA || !openedB) {
             MESSAGE("multicast is not available here, skipping: ", lineA.error().message());
@@ -369,12 +369,12 @@ TEST_SUITE("UDPConnection") {
     TEST_CASE("multicast: send to a group through the tx queue") {
         Reactor reactor;
         constexpr std::uint16_t kPort = kFixedPortBase + 38;
-        UDPConnection receiver{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 3}, kPort}}};
+        UdpConnection receiver{reactor, {.group = Endpoint{IPv4Address{239, 255, 10, 3}, kPort}}};
         if (!receiver.open()) {
             MESSAGE("multicast is not available here, skipping: ", receiver.error().message());
             return;
         }
-        UDPConnection publisher{reactor, {.remote = Endpoint{IPv4Address{239, 255, 10, 3}, kPort}}};
+        UdpConnection publisher{reactor, {.remote = Endpoint{IPv4Address{239, 255, 10, 3}, kPort}}};
         REQUIRE(publisher.open());
         REQUIRE_EQ(publisher.state(), ConnectionState::Ready);
         REQUIRE(publisher.tx.push(asBytes("snapshot request")));

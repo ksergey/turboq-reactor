@@ -1,7 +1,7 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
-// Implementation of UDPConnection.h (templates), included at its end.
+// Implementation of UdpConnection.h (templates), included at its end.
 
 #pragma once
 
@@ -34,12 +34,12 @@ namespace detail {
 inline constexpr unsigned kMaxBufferCount = 32768; // io_uring provided buffer ring limit
 
 template <typename Backend>
-UDPCore<Backend>::UDPCore(Backend& ring, UDPOptions options)
+UdpCore<Backend>::UdpCore(Backend& ring, UdpOptions options)
     : ring_{ring}, options_{std::move(options)},
       bufferCount_{std::bit_ceil(std::clamp(options_.bufferCount, 1u, kMaxBufferCount))} {
     if (options_.maxDatagramSize == 0 || options_.maxDatagramSize > 65535 || options_.txBufferSize == 0 ||
         options_.txQueueDepth == 0) {
-        throw std::system_error{makeErrorCode(Error::InvalidOptions), "UDPCore"};
+        throw std::system_error{makeErrorCode(Error::InvalidOptions), "UdpCore"};
     }
 
     // Every receive buffer holds detail::RecvMsgOut + sender address + control messages + payload.
@@ -70,24 +70,24 @@ UDPCore<Backend>::UDPCore(Backend& ring, UDPOptions options)
 }
 
 template <typename Backend>
-auto UDPCore<Backend>::create(Backend& ring, UDPOptions options) -> std::unique_ptr<UDPCore> {
-    return std::unique_ptr<UDPCore>{new UDPCore{ring, std::move(options)}};
+auto UdpCore<Backend>::create(Backend& ring, UdpOptions options) -> std::unique_ptr<UdpCore> {
+    return std::unique_ptr<UdpCore>{new UdpCore{ring, std::move(options)}};
 }
 
 template <typename Backend>
-void UDPCore<Backend>::onRetired() noexcept {
+void UdpCore<Backend>::onRetired() noexcept {
     pool_->release();
 }
 
 template <typename Backend>
-UDPCore<Backend>::~UDPCore() noexcept {
+UdpCore<Backend>::~UdpCore() noexcept {
     if (fd_ >= 0) {
         ::close(fd_);
     }
 }
 
 template <typename Backend>
-auto UDPCore<Backend>::open() -> std::expected<void, std::error_code> {
+auto UdpCore<Backend>::open() -> std::expected<void, std::error_code> {
     if (state_ != ConnectionState::Idle && state_ != ConnectionState::Closed) {
         return std::unexpected(makeErrorCode(Error::InvalidState));
     }
@@ -260,7 +260,7 @@ auto UDPCore<Backend>::open() -> std::expected<void, std::error_code> {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::close() noexcept {
+void UdpCore<Backend>::close() noexcept {
     switch (state_) {
     case ConnectionState::Idle: state_ = ConnectionState::Closed; break;
     case ConnectionState::Connecting: [[fallthrough]];
@@ -272,7 +272,7 @@ void UDPCore<Backend>::close() noexcept {
 }
 
 template <typename Backend>
-auto UDPCore<Backend>::localEndpoint() const noexcept -> Endpoint {
+auto UdpCore<Backend>::localEndpoint() const noexcept -> Endpoint {
     if (fd_ < 0) {
         return {};
     }
@@ -285,7 +285,7 @@ auto UDPCore<Backend>::localEndpoint() const noexcept -> Endpoint {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept {
+void UdpCore<Backend>::onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept {
     switch (op) {
     case detail::OpCode::Recv: {
         if (res >= 0 && (flags & detail::kCompletionBuffer)) [[likely]] {
@@ -332,7 +332,7 @@ void UDPCore<Backend>::onCompletion(detail::OpCode op, std::int32_t res, std::ui
 }
 
 template <typename Backend>
-void UDPCore<Backend>::onDatagram(std::size_t length, std::uint32_t flags) noexcept {
+void UdpCore<Backend>::onDatagram(std::size_t length, std::uint32_t flags) noexcept {
     auto const bufferId = static_cast<std::uint16_t>(flags >> detail::kCompletionBufferShift);
     auto* const buffer = buffers_.data() + std::size_t{bufferId} * bufferStride_;
 
@@ -375,12 +375,12 @@ void UDPCore<Backend>::onDatagram(std::size_t length, std::uint32_t flags) noexc
 }
 
 template <typename Backend>
-void UDPCore<Backend>::onTxReady() noexcept {
+void UdpCore<Backend>::onTxReady() noexcept {
     this->startSend();
 }
 
 template <typename Backend>
-auto UDPCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<std::error_code> {
+auto UdpCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<std::error_code> {
     if (fd_ >= 0) {
         ::close(fd_);
         fd_ = -1;
@@ -392,7 +392,7 @@ auto UDPCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<
 }
 
 template <typename Backend>
-void UDPCore<Backend>::fail(std::error_code ec) noexcept {
+void UdpCore<Backend>::fail(std::error_code ec) noexcept {
     if (state_ == ConnectionState::Closing || state_ == ConnectionState::Closed) {
         return;
     }
@@ -401,7 +401,7 @@ void UDPCore<Backend>::fail(std::error_code ec) noexcept {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::beginClose() noexcept {
+void UdpCore<Backend>::beginClose() noexcept {
     state_ = ConnectionState::Closing;
     prepared_ = 0;
     txDirty_ = false;
@@ -416,7 +416,7 @@ void UDPCore<Backend>::beginClose() noexcept {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::finishClose() noexcept {
+void UdpCore<Backend>::finishClose() noexcept {
     if (fd_ >= 0) {
         ring_.forget(fd_);
         ::close(fd_); // leaves the multicast group
@@ -428,7 +428,7 @@ void UDPCore<Backend>::finishClose() noexcept {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::armRecv() noexcept {
+void UdpCore<Backend>::armRecv() noexcept {
     if (rxTail_ - rxHead_ == bufferCount_) {
         // Every buffer is queued for the user: nothing to receive into. consume() resumes.
         rxStalled_ = true;
@@ -445,21 +445,21 @@ void UDPCore<Backend>::armRecv() noexcept {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::resumeRecv() noexcept {
+void UdpCore<Backend>::resumeRecv() noexcept {
     if (state_ == ConnectionState::Ready && !recvInFlight_) {
         this->armRecv();
     }
 }
 
 template <typename Backend>
-void UDPCore<Backend>::markTxDirty() noexcept {
+void UdpCore<Backend>::markTxDirty() noexcept {
     if (state_ == ConnectionState::Ready) {
         ring_.schedule(this);
     }
 }
 
 template <typename Backend>
-void UDPCore<Backend>::flushTx() noexcept {
+void UdpCore<Backend>::flushTx() noexcept {
     if (state_ != ConnectionState::Ready || sendInFlight_) {
         return;
     }
@@ -476,7 +476,7 @@ void UDPCore<Backend>::flushTx() noexcept {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::sendDirect() noexcept {
+void UdpCore<Backend>::sendDirect() noexcept {
     while (txHead_ != txTail_) {
         std::size_t const length = txLengths_[txHead_ & txMask_];
         auto const data = txBuffer_.readable();
@@ -498,7 +498,7 @@ void UDPCore<Backend>::sendDirect() noexcept {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::startSend() noexcept {
+void UdpCore<Backend>::startSend() noexcept {
     if (state_ != ConnectionState::Ready || sendInFlight_ || txHead_ == txTail_) {
         return;
     }
@@ -519,13 +519,13 @@ void UDPCore<Backend>::startSend() noexcept {
 }
 
 template <typename Backend>
-void UDPCore<Backend>::popDatagram() noexcept {
+void UdpCore<Backend>::popDatagram() noexcept {
     txBuffer_.consume(txLengths_[txHead_ & txMask_]);
     ++txHead_;
 }
 
 template <typename Backend>
-void UDPCore<Backend>::dropDatagram(int error) noexcept {
+void UdpCore<Backend>::dropDatagram(int error) noexcept {
     this->popDatagram();
     ++txErrors_;
     txLastError_ = makePosixErrorCode(error);
@@ -534,8 +534,8 @@ void UDPCore<Backend>::dropDatagram(int error) noexcept {
 } // namespace detail
 
 template <typename Backend>
-UDPConnection<Backend>::UDPConnection(Reactor<Backend>& reactor, UDPOptions options)
-    : core_{detail::UDPCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
+UdpConnection<Backend>::UdpConnection(Reactor<Backend>& reactor, UdpOptions options)
+    : core_{detail::UdpCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx}, tx{core_->tx} {
     reactor.backend().attach(core_.get());
 }
 

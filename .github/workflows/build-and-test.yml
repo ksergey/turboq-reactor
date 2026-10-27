@@ -204,7 +204,7 @@ jobs:
         run: |
           # unprivileged they skip themselves; as root they create a veth pair in a private netns
           shopt -s nullglob
-          for test in build/code/*XDPConnection-test; do sudo --preserve-env "$test"; done
+          for test in build/code/*XdpConnection-test; do sudo --preserve-env "$test"; done
 
   sanitizers:
     name: ${{ matrix.sanitizer }} with ${{ matrix.compiler }}
@@ -349,7 +349,7 @@ jobs:
         run: |
           # unprivileged they skip themselves; as root they create a veth pair in a private netns
           shopt -s nullglob
-          for test in build/code/*XDPConnection-test; do sudo --preserve-env "$test"; done
+          for test in build/code/*XdpConnection-test; do sudo --preserve-env "$test"; done
 
   # The other ways to get (or not get) the io_uring backend; one compiler is enough.
   build-options:
@@ -398,4 +398,4 @@ jobs:
       - name: run AF_XDP tests as root
         run: |
           shopt -s nullglob
-          for test in build/code/*XDPConnection-test; do sudo "$test"; done
+          for test in build/code/*XdpConnection-test; do sudo "$test"; done

@@ -1,7 +1,7 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
-// Implementation of XDPConnection.h (templates), included at its end.
+// Implementation of XdpConnection.h (templates), included at its end.
 
 #pragma once
 
@@ -33,18 +33,18 @@ namespace turboq::reactor {
 namespace detail {
 
 template <typename Backend>
-XDPCore<Backend>::XDPCore(Backend& ring, XDPOptions options)
+XdpCore<Backend>::XdpCore(Backend& ring, XdpOptions options)
     : ring_{ring}, options_{std::move(options)},
       frameCount_{std::bit_ceil(std::clamp(options_.frameCount, 64u, kMaxXskFrameCount))},
       frameSize_{options_.frameSize}, mask_{frameCount_ - 1} {
     auto const pageSize = static_cast<unsigned>(::sysconf(_SC_PAGESIZE));
     if (options_.interface.empty() || !std::has_single_bit(frameSize_) || frameSize_ < 2048 || frameSize_ > pageSize ||
         options_.redirectAll != options_.udpPorts.empty() || (options_.source && options_.groups.empty())) {
-        throw std::system_error{makeErrorCode(Error::InvalidOptions), "XDPCore"};
+        throw std::system_error{makeErrorCode(Error::InvalidOptions), "XdpCore"};
     }
     for (auto const& group : options_.groups) {
         if (!group.isMulticast() || (options_.source && options_.source->family() != group.family())) {
-            throw std::system_error{makeErrorCode(Error::InvalidOptions), "XDPCore"};
+            throw std::system_error{makeErrorCode(Error::InvalidOptions), "XdpCore"};
         }
     }
 
@@ -57,12 +57,12 @@ XDPCore<Backend>::XDPCore(Backend& ring, XDPOptions options)
 }
 
 template <typename Backend>
-auto XDPCore<Backend>::create(Backend& ring, XDPOptions options) -> std::unique_ptr<XDPCore> {
-    return std::unique_ptr<XDPCore>{new XDPCore{ring, std::move(options)}};
+auto XdpCore<Backend>::create(Backend& ring, XdpOptions options) -> std::unique_ptr<XdpCore> {
+    return std::unique_ptr<XdpCore>{new XdpCore{ring, std::move(options)}};
 }
 
 template <typename Backend>
-XDPCore<Backend>::~XDPCore() noexcept {
+XdpCore<Backend>::~XdpCore() noexcept {
     memberships_.clear();
     program_.reset();
     if (fd_ >= 0) {
@@ -71,7 +71,7 @@ XDPCore<Backend>::~XDPCore() noexcept {
 }
 
 template <typename Backend>
-auto XDPCore<Backend>::open() -> std::expected<void, std::error_code> {
+auto XdpCore<Backend>::open() -> std::expected<void, std::error_code> {
     if (state_ != ConnectionState::Idle && state_ != ConnectionState::Closed) {
         return std::unexpected(makeErrorCode(Error::InvalidState));
     }
@@ -157,7 +157,7 @@ auto XDPCore<Backend>::open() -> std::expected<void, std::error_code> {
     address.sxdp_ifindex = ifindex;
     address.sxdp_queue_id = options_.queue;
     bool bound = false;
-    if (options_.zeroCopy != XDPZeroCopy::Disable) {
+    if (options_.zeroCopy != XdpZeroCopy::Disable) {
         address.sxdp_flags = XDP_USE_NEED_WAKEUP | XDP_ZEROCOPY;
         int const error = bindXskSocket(fd_, address);
         if (error == 0) {
@@ -165,7 +165,7 @@ auto XDPCore<Backend>::open() -> std::expected<void, std::error_code> {
         } else if (error == EBUSY) {
             diagnostic_ = std::format("bind: queue {} of {} is in use; ", options_.queue, options_.interface);
             return this->failSync(makePosixErrorCode(error));
-        } else if (options_.zeroCopy == XDPZeroCopy::Require) {
+        } else if (options_.zeroCopy == XdpZeroCopy::Require) {
             diagnostic_ = std::format("bind (zero-copy): {}; ", std::strerror(error));
             return this->failSync(makeErrorCode(Error::XdpZeroCopyUnavailable));
         } else {
@@ -201,8 +201,8 @@ auto XDPCore<Backend>::open() -> std::expected<void, std::error_code> {
             .ifindex = ifindex,
             .maxQueue = options_.queue,
             .udpPorts = options_.udpPorts,
-            .allowNative = options_.attachMode != XDPAttachMode::Generic,
-            .allowGeneric = options_.attachMode != XDPAttachMode::Native,
+            .allowNative = options_.attachMode != XdpAttachMode::Generic,
+            .allowGeneric = options_.attachMode != XdpAttachMode::Native,
             .timestamps = options_.hardwareTimestamps,
         },
         programDiagnostic);
@@ -262,7 +262,7 @@ auto XDPCore<Backend>::open() -> std::expected<void, std::error_code> {
 }
 
 template <typename Backend>
-void XDPCore<Backend>::close() noexcept {
+void XdpCore<Backend>::close() noexcept {
     switch (state_) {
     case ConnectionState::Idle: state_ = ConnectionState::Closed; break;
     case ConnectionState::Connecting: [[fallthrough]];
@@ -274,7 +274,7 @@ void XDPCore<Backend>::close() noexcept {
 }
 
 template <typename Backend>
-auto XDPCore<Backend>::statistics() const noexcept -> XDPStatistics {
+auto XdpCore<Backend>::statistics() const noexcept -> XdpStatistics {
     if (fd_ < 0) {
         return {};
     }
@@ -292,7 +292,7 @@ auto XDPCore<Backend>::statistics() const noexcept -> XDPStatistics {
 }
 
 template <typename Backend>
-auto XDPCore<Backend>::refresh() noexcept -> std::size_t {
+auto XdpCore<Backend>::refresh() noexcept -> std::size_t {
     if (state_ != ConnectionState::Ready) {
         return 0;
     }
@@ -317,13 +317,13 @@ auto XDPCore<Backend>::refresh() noexcept -> std::size_t {
 }
 
 template <typename Backend>
-void XDPCore<Backend>::wakeup() noexcept {
+void XdpCore<Backend>::wakeup() noexcept {
     // A zero-length receive runs the driver's NAPI (or busy polls); the data comes in the ring.
     [[maybe_unused]] auto const rc = ::recvfrom(fd_, nullptr, 0, MSG_DONTWAIT, nullptr, nullptr);
 }
 
 template <typename Backend>
-void XDPCore<Backend>::armPoll() noexcept {
+void XdpCore<Backend>::armPoll() noexcept {
     if (!ring_.pollFd(this, fd_, POLLIN, nullptr)) [[unlikely]] {
         this->fail(makeErrorCode(Error::SubmissionQueueFull));
         return;
@@ -333,7 +333,7 @@ void XDPCore<Backend>::armPoll() noexcept {
 }
 
 template <typename Backend>
-void XDPCore<Backend>::onCompletion(OpCode op, std::int32_t res, std::uint32_t /*flags*/) noexcept {
+void XdpCore<Backend>::onCompletion(OpCode op, std::int32_t res, std::uint32_t /*flags*/) noexcept {
     switch (op) {
     case OpCode::Poll:
         // Frames arrived (or closing). Re-armed by the rx check that finds the queue empty.
@@ -355,7 +355,7 @@ void XDPCore<Backend>::onCompletion(OpCode op, std::int32_t res, std::uint32_t /
 }
 
 template <typename Backend>
-auto XDPCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<std::error_code> {
+auto XdpCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<std::error_code> {
     memberships_.clear();
     program_.reset();
     if (fd_ >= 0) {
@@ -370,7 +370,7 @@ auto XDPCore<Backend>::failSync(std::error_code ec) noexcept -> std::unexpected<
 }
 
 template <typename Backend>
-void XDPCore<Backend>::fail(std::error_code ec) noexcept {
+void XdpCore<Backend>::fail(std::error_code ec) noexcept {
     if (state_ == ConnectionState::Closing || state_ == ConnectionState::Closed) {
         return;
     }
@@ -379,7 +379,7 @@ void XDPCore<Backend>::fail(std::error_code ec) noexcept {
 }
 
 template <typename Backend>
-void XDPCore<Backend>::beginClose() noexcept {
+void XdpCore<Backend>::beginClose() noexcept {
     state_ = ConnectionState::Closing;
     if (inflight_ == 0) {
         this->finishClose();
@@ -391,7 +391,7 @@ void XDPCore<Backend>::beginClose() noexcept {
 }
 
 template <typename Backend>
-void XDPCore<Backend>::finishClose() noexcept {
+void XdpCore<Backend>::finishClose() noexcept {
     memberships_.clear(); // leaves the groups
     program_.reset();     // detaches the program: frames go to the kernel again
     if (fd_ >= 0) {
@@ -409,8 +409,8 @@ void XDPCore<Backend>::finishClose() noexcept {
 } // namespace detail
 
 template <typename Backend>
-XDPConnection<Backend>::XDPConnection(Reactor<Backend>& reactor, XDPOptions options)
-    : core_{detail::XDPCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx} {
+XdpConnection<Backend>::XdpConnection(Reactor<Backend>& reactor, XdpOptions options)
+    : core_{detail::XdpCore<Backend>::create(reactor.backend(), std::move(options))}, rx{core_->rx} {
     reactor.backend().attach(core_.get());
 }
 

@@ -22,7 +22,7 @@
 #include <turboq/Platform.h>
 
 #include <turboq-reactor/Forward.h>
-#include <turboq-reactor/TCPConnection.h>
+#include <turboq-reactor/TcpConnection.h>
 #include <turboq-reactor/TLSConnection.h>
 #include <turboq-reactor/Types.h>
 #include <turboq-reactor/detail/IoHandler.h>
@@ -184,8 +184,8 @@ public:
 
 private:
     Backend& ring_;
-    std::unique_ptr<TCPCore<Backend>> tcpCore_; // owned: lives and dies with this connection
-    TCPCore<Backend>& tcp_;
+    std::unique_ptr<TcpCore<Backend>> tcpCore_; // owned: lives and dies with this connection
+    TcpCore<Backend>& tcp_;
     TLSCore<Backend>* tls_; // the same object as tcp_ for wss://, nullptr for ws://
     WsOptions options_;
     WsUrl url_;
@@ -296,7 +296,7 @@ public:
 
 private:
     WebsocketCore(
-        Backend& ring, std::unique_ptr<TCPCore<Backend>> tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url);
+        Backend& ring, std::unique_ptr<TcpCore<Backend>> tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url);
 
 public:
     /// Parse the URL, create the TCP layer. Throws std::system_error.
@@ -387,7 +387,7 @@ public:
 
     WebsocketConnection& operator=(WebsocketConnection&& other) noexcept = default;
 
-    /// Sends Close if Ready and closes. Never blocks (see TCPConnection::~TCPConnection()).
+    /// Sends Close if Ready and closes. Never blocks (see TcpConnection::~TcpConnection()).
     ~WebsocketConnection() noexcept = default;
 
     /// Connect: TCP, TLS (wss), HTTP upgrade. Allowed in Idle and Closed states. Drops messages

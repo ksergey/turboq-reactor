@@ -16,11 +16,11 @@ compiled when used, and then that library has to be linked by you:
 
 | header | needs |
 |---|---|
-| `Reactor.h`, `EpollBackend.h`, `TCPConnection.h`, `UDPConnection.h`, `XDPConnection.h`, `Address.h` | nothing |
+| `Reactor.h`, `EpollBackend.h`, `TcpConnection.h`, `UdpConnection.h`, `XdpConnection.h`, `Address.h` | nothing |
 | `IoUringBackend.h` | liburing |
 | `TLSConnection.h`, `WebsocketConnection.h` | OpenSSL 3.0+ (`OpenSSL::SSL`, `OpenSSL::Crypto`) |
 
-`Reactor<>` / `TCPConnection<>` use epoll by default; define `TURBOQ_REACTOR_IO_URING=1` (for the
+`Reactor<>` / `TcpConnection<>` use epoll by default; define `TURBOQ_REACTOR_IO_URING=1` (for the
 whole program) to make io_uring the default, or name the backend: `Reactor<IoUringBackend>`.
 
 ## Requirements
@@ -78,7 +78,7 @@ int main() {
 }
 ```
 
-`TCPConnection`, `TLSConnection` and `UDPConnection` (unicast and multicast) work the same way:
+`TcpConnection`, `TLSConnection` and `UdpConnection` (unicast and multicast) work the same way:
 `rx.fetch()` / `rx.consume()` to read, `tx.prepare()` / `tx.commit()` / `tx.flush()` to write.
 [`examples/binance_market_data.cpp`](examples/binance_market_data.cpp) adds reconnection with
 backoff, a liveness watchdog and graceful shutdown.
@@ -87,18 +87,18 @@ and prints each datagram with its NIC, kernel and user receive timestamps.
 
 The backend is a template parameter. To pick it explicitly declare `Reactor<IoUringBackend> reactor;`
 (with `#include <turboq-reactor/IoUringBackend.h>` and liburing linked) or `Reactor<EpollBackend>` — connections deduce the backend from the reactor they are given
-(`TCPConnection conn{reactor, {...}}`); as class members write `TCPConnection<>` (the default
-backend) or `TCPConnection<EpollBackend>`.
+(`TcpConnection conn{reactor, {...}}`); as class members write `TcpConnection<>` (the default
+backend) or `TcpConnection<EpollBackend>`.
 
 ## AF_XDP
 
-`XDPConnection` takes raw Ethernet frames straight from a NIC receive queue, before the kernel
+`XdpConnection` takes raw Ethernet frames straight from a NIC receive queue, before the kernel
 network stack: a small built-in XDP program (no libbpf needed) hands UDP to the chosen ports to an
 AF_XDP socket, zero-copy where the driver supports it, everything else goes to the kernel as usual.
 
 ```cpp
 Reactor reactor;
-XDPConnection feed{reactor, {.interface = "eth1", .queue = 3, .udpPorts = {5001},
+XdpConnection feed{reactor, {.interface = "eth1", .queue = 3, .udpPorts = {5001},
                              .groups = {IPv4Address{239, 1, 1, 1}}, .hardwareTimestamps = true}};
 feed.open();
 while (true) {

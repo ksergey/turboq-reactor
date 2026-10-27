@@ -30,7 +30,7 @@
 
 #include <turboq/Utils.h>
 #include <turboq-reactor/Reactor.h>
-#include <turboq-reactor/TCPConnection.h>
+#include <turboq-reactor/TcpConnection.h>
 
 namespace {
 
@@ -130,7 +130,7 @@ void runReactorClient(std::string const& host, std::uint16_t port, std::size_t s
     if (!endpoints) {
         throw std::runtime_error{"can't resolve " + host + ": " + endpoints.error().message()};
     }
-    TCPConnection conn{reactor, {.endpoint = endpoints->front(), .directSend = directSend}};
+    TcpConnection conn{reactor, {.endpoint = endpoints->front(), .directSend = directSend}};
     if (auto result = conn.connect(); !result) {
         throw std::runtime_error{"connect failed: " + result.error().message()};
     }

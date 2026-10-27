@@ -7,9 +7,9 @@
 #include <doctest/doctest.h>
 
 #include <turboq-reactor/Reactor.h>
-#include <turboq-reactor/TCPConnection.h>
-#include <turboq-reactor/UDPConnection.h>
-#include <turboq-reactor/XDPConnection.h>
+#include <turboq-reactor/TcpConnection.h>
+#include <turboq-reactor/UdpConnection.h>
+#include <turboq-reactor/XdpConnection.h>
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
 #include <turboq-reactor/TLSConnection.h>
 #include <turboq-reactor/WebsocketConnection.h>
@@ -22,7 +22,7 @@ TEST_SUITE("Reactor") {
 #if TURBOQ_REACTOR_IO_URING
     TEST_CASE("io_uring is the default backend") {
         static_assert(std::is_same_v<Reactor<>, Reactor<IoUringBackend>>);
-        static_assert(std::is_same_v<TCPConnection<>, TCPConnection<IoUringBackend>>);
+        static_assert(std::is_same_v<TcpConnection<>, TcpConnection<IoUringBackend>>);
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
         static_assert(std::is_same_v<WebsocketConnection<>, WebsocketConnection<IoUringBackend>>);
 #endif
@@ -32,19 +32,19 @@ TEST_SUITE("Reactor") {
         Reactor configured{{.taskRunMode = TaskRunMode::Cooperative}};
         static_assert(std::is_same_v<decltype(configured), Reactor<IoUringBackend>>);
 
-        TCPConnection tcp{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}};
-        static_assert(std::is_same_v<decltype(tcp), TCPConnection<IoUringBackend>>);
+        TcpConnection tcp{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}};
+        static_assert(std::is_same_v<decltype(tcp), TcpConnection<IoUringBackend>>);
         REQUIRE_EQ(tcp.state(), ConnectionState::Idle);
     }
 #else
     TEST_CASE("epoll is the default backend without io_uring") {
         static_assert(std::is_same_v<Reactor<>, Reactor<EpollBackend>>);
-        static_assert(std::is_same_v<TCPConnection<>, TCPConnection<EpollBackend>>);
+        static_assert(std::is_same_v<TcpConnection<>, TcpConnection<EpollBackend>>);
 
         Reactor reactor;
         static_assert(std::is_same_v<decltype(reactor), Reactor<EpollBackend>>);
-        TCPConnection tcp{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}};
-        static_assert(std::is_same_v<decltype(tcp), TCPConnection<EpollBackend>>);
+        TcpConnection tcp{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}};
+        static_assert(std::is_same_v<decltype(tcp), TcpConnection<EpollBackend>>);
         REQUIRE_EQ(tcp.state(), ConnectionState::Idle);
     }
 #endif
@@ -54,7 +54,7 @@ TEST_SUITE("Reactor") {
 
         // Any new socket gets an fd above 0, 1, 2.
         Reactor<EpollBackend> reactor{{.maxFds = 3}};
-        UDPConnection udp{reactor, {}};
+        UdpConnection udp{reactor, {}};
         REQUIRE_FALSE(udp.open());
     }
 
@@ -66,23 +66,23 @@ TEST_SUITE("Reactor") {
             static_assert(std::is_nothrow_move_assignable_v<Connection>);
             static_assert(std::is_nothrow_destructible_v<Connection>);
         };
-        check(std::type_identity<TCPConnection<EpollBackend>>{});
-        check(std::type_identity<UDPConnection<EpollBackend>>{});
+        check(std::type_identity<TcpConnection<EpollBackend>>{});
+        check(std::type_identity<UdpConnection<EpollBackend>>{});
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
         check(std::type_identity<TLSConnection<EpollBackend>>{});
 #endif
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
         check(std::type_identity<WebsocketConnection<EpollBackend>>{});
 #endif
-        check(std::type_identity<XDPConnection<EpollBackend>>{});
+        check(std::type_identity<XdpConnection<EpollBackend>>{});
 
         // Moving hands the core over; the moved-from handle is empty and destroys as a no-op.
         Reactor<EpollBackend> reactor;
-        UDPConnection first{reactor, {}};
+        UdpConnection first{reactor, {}};
         REQUIRE(first.open());
-        UDPConnection second = std::move(first);
+        UdpConnection second = std::move(first);
         REQUIRE_EQ(second.state(), ConnectionState::Ready);
-        UDPConnection third{reactor, {}};
+        UdpConnection third{reactor, {}};
         third = std::move(second); // third's own core is released
         REQUIRE_EQ(third.state(), ConnectionState::Ready);
     }
@@ -90,10 +90,10 @@ TEST_SUITE("Reactor") {
     TEST_CASE("connections deduce the backend from the reactor") {
         Reactor<EpollBackend> reactor;
 
-        TCPConnection tcp{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}};
-        UDPConnection udp{reactor, {}};
-        static_assert(std::is_same_v<decltype(tcp), TCPConnection<EpollBackend>>);
-        static_assert(std::is_same_v<decltype(udp), UDPConnection<EpollBackend>>);
+        TcpConnection tcp{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}};
+        UdpConnection udp{reactor, {}};
+        static_assert(std::is_same_v<decltype(tcp), TcpConnection<EpollBackend>>);
+        static_assert(std::is_same_v<decltype(udp), UdpConnection<EpollBackend>>);
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
         TLSConnection tls{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}, {.serverName = "localhost"}};
         static_assert(std::is_same_v<decltype(tls), TLSConnection<EpollBackend>>);
@@ -102,8 +102,8 @@ TEST_SUITE("Reactor") {
         WebsocketConnection ws{reactor, {.url = "ws://localhost:1/"}};
         static_assert(std::is_same_v<decltype(ws), WebsocketConnection<EpollBackend>>);
 #endif
-        XDPConnection xdp{reactor, {.interface = "lo", .udpPorts = {1}}};
-        static_assert(std::is_same_v<decltype(xdp), XDPConnection<EpollBackend>>);
+        XdpConnection xdp{reactor, {.interface = "lo", .udpPorts = {1}}};
+        static_assert(std::is_same_v<decltype(xdp), XdpConnection<EpollBackend>>);
         REQUIRE_EQ(tcp.state(), ConnectionState::Idle);
     }
 }

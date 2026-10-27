@@ -40,7 +40,7 @@ enum class Timestamping : std::uint8_t {
     Hardware,
 };
 
-struct UDPOptions {
+struct UdpOptions {
     /// Multicast feed to subscribe to: the group to join and the port it is published on.
     std::optional<Endpoint> group{};
     /// Source for source-specific multicast (MCAST_JOIN_SOURCE_GROUP). None for any source.
@@ -100,15 +100,15 @@ struct DatagramInfo {
     Timestamp hardwareTimestamp{};
     /// Sender.
     Endpoint source{};
-    /// Datagram was longer than UDPOptions::maxDatagramSize.
+    /// Datagram was longer than UdpOptions::maxDatagramSize.
     bool truncated{false};
 };
 
 namespace detail {
 
-/// Implementation of UDPConnection (see there). Owned by the handle, released through the reactor.
+/// Implementation of UdpConnection (see there). Owned by the handle, released through the reactor.
 template <typename Backend>
-class UDPCore final : public IoHandler {
+class UdpCore final : public IoHandler {
 private:
     struct Entry {
         std::span<std::byte const> payload;
@@ -119,10 +119,10 @@ private:
 public:
     class Rx {
     private:
-        friend class UDPCore;
-        UDPCore* conn_;
+        friend class UdpCore;
+        UdpCore* conn_;
 
-        explicit Rx(UDPCore* conn) noexcept : conn_{conn} {}
+        explicit Rx(UdpCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// Payload of the oldest datagram. Empty span if the queue is empty (a received empty
@@ -168,10 +168,10 @@ public:
 
     class Tx {
     private:
-        friend class UDPCore;
-        UDPCore* conn_;
+        friend class UdpCore;
+        UdpCore* conn_;
 
-        explicit Tx(UDPCore* conn) noexcept : conn_{conn} {}
+        explicit Tx(UdpCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// Reserve space for one datagram. Empty span if the connection has no destination, is
@@ -239,7 +239,7 @@ public:
 
 private:
     Backend& ring_;
-    UDPOptions options_;
+    UdpOptions options_;
 
     int fd_{-1};
     ConnectionState state_{ConnectionState::Idle};
@@ -281,10 +281,10 @@ public:
     Rx rx{this};
     Tx tx{this};
 
-    UDPCore(UDPCore const&) = delete;
-    UDPCore& operator=(UDPCore const&) = delete;
+    UdpCore(UdpCore const&) = delete;
+    UdpCore& operator=(UdpCore const&) = delete;
 
-    ~UDPCore() noexcept override;
+    ~UdpCore() noexcept override;
 
     /// Create the socket, bind, join the group and start receiving. Synchronous: on success the
     /// connection is Ready, on failure Closed with error() set. Allowed in Idle and Closed states.
@@ -303,7 +303,7 @@ public:
         return error_;
     }
 
-    [[nodiscard]] auto options() const noexcept -> UDPOptions const& {
+    [[nodiscard]] auto options() const noexcept -> UdpOptions const& {
         return options_;
     }
 
@@ -316,11 +316,11 @@ public:
     }
 
 private:
-    UDPCore(Backend& ring, UDPOptions options);
+    UdpCore(Backend& ring, UdpOptions options);
 
 public:
     /// Validate options, allocate buffers, register the buffer ring. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, UDPOptions options) -> std::unique_ptr<UDPCore>;
+    [[nodiscard]] static auto create(Backend& ring, UdpOptions options) -> std::unique_ptr<UdpCore>;
 
 private:
     void onCompletion(detail::OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -378,29 +378,29 @@ private:
 /// Sequencing, gap detection and A/B arbitration are not done here: use two connections and
 /// arbitrate in your code.
 template <typename Backend>
-class UDPConnection {
+class UdpConnection {
 private:
-    detail::CorePtr<detail::UDPCore<Backend>> core_;
+    detail::CorePtr<detail::UdpCore<Backend>> core_;
 
 public:
-    typename detail::UDPCore<Backend>::Rx rx;
-    typename detail::UDPCore<Backend>::Tx tx;
+    typename detail::UdpCore<Backend>::Rx rx;
+    typename detail::UdpCore<Backend>::Tx tx;
 
     /// Create a socket served by `reactor` (which must outlive it): allocates and registers the
     /// receive buffers. Does not open: call open(). Throws std::system_error on invalid options,
     /// allocation or registration failure. With TaskRunMode::Deferred create it before the first
     /// poll() or on the polling thread.
-    UDPConnection(Reactor<Backend>& reactor, UDPOptions options);
+    UdpConnection(Reactor<Backend>& reactor, UdpOptions options);
 
-    UDPConnection(UDPConnection const&) = delete;
-    UDPConnection& operator=(UDPConnection const&) = delete;
+    UdpConnection(UdpConnection const&) = delete;
+    UdpConnection& operator=(UdpConnection const&) = delete;
 
-    UDPConnection(UDPConnection&& other) noexcept = default;
+    UdpConnection(UdpConnection&& other) noexcept = default;
 
-    UDPConnection& operator=(UDPConnection&& other) noexcept = default;
+    UdpConnection& operator=(UdpConnection&& other) noexcept = default;
 
-    /// Closes the socket if needed. Never blocks (see TCPConnection::~TCPConnection()).
-    ~UDPConnection() noexcept = default;
+    /// Closes the socket if needed. Never blocks (see TcpConnection::~TcpConnection()).
+    ~UdpConnection() noexcept = default;
 
     /// Create the socket, bind, join the group and start receiving. Synchronous: on success the
     /// connection is Ready, on failure Closed with error() set. Allowed in Idle and Closed states.
@@ -423,7 +423,7 @@ public:
         return core_->error();
     }
 
-    [[nodiscard]] auto options() const noexcept -> UDPOptions const& {
+    [[nodiscard]] auto options() const noexcept -> UdpOptions const& {
         return core_->options();
     }
 
@@ -440,4 +440,4 @@ public:
 
 } // namespace turboq::reactor
 
-#include <turboq-reactor/detail/UDPConnectionImpl.h>
+#include <turboq-reactor/detail/UdpConnectionImpl.h>

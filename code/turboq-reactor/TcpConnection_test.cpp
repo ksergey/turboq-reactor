@@ -106,7 +106,7 @@ void writeAll(int fd, std::string_view data) {
 
 } // namespace
 
-TEST_SUITE("TCPConnection") {
+TEST_SUITE("TcpConnection") {
 
     TEST_CASE("connect and exchange data in both directions") {
         for (auto const& config : kReactorConfigs) {
@@ -115,7 +115,7 @@ TEST_SUITE("TCPConnection") {
                 CAPTURE(directSend);
                 Listener listener;
                 Reactor reactor{config};
-                TCPConnection conn{
+                TcpConnection conn{
                     reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}, .directSend = directSend}};
                 REQUIRE(conn.connect());
                 REQUIRE_EQ(conn.state(), ConnectionState::Connecting);
@@ -173,7 +173,7 @@ TEST_SUITE("TCPConnection") {
             CAPTURE(&config - kReactorConfigs.data());
             Listener listener;
             Reactor reactor{config};
-            TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
+            TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
             REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
                 return conn.state() == ConnectionState::Ready;
@@ -199,7 +199,7 @@ TEST_SUITE("TCPConnection") {
             port = listener.port();
         }
         Reactor reactor;
-        TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), port}}};
+        TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), port}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
@@ -210,7 +210,7 @@ TEST_SUITE("TCPConnection") {
     TEST_CASE("an endpoint without address or port fails synchronously") {
         Reactor reactor;
         for (auto const& endpoint : {Endpoint{}, Endpoint{IPv4Address::loopback(), 0}}) {
-            TCPConnection conn{reactor, {.endpoint = endpoint}};
+            TcpConnection conn{reactor, {.endpoint = endpoint}};
             auto const result = conn.connect();
             REQUIRE_FALSE(result);
             REQUIRE_EQ(result.error(), makeErrorCode(Error::InvalidAddress));
@@ -236,7 +236,7 @@ TEST_SUITE("TCPConnection") {
         ::getsockname(fd, std::bit_cast<sockaddr*>(&addr), &len);
 
         Reactor reactor;
-        TCPConnection conn{reactor, {.endpoint = {IPv6Address::loopback(), ntohs(addr.sin6_port)}}};
+        TcpConnection conn{reactor, {.endpoint = {IPv6Address::loopback(), ntohs(addr.sin6_port)}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready;
@@ -247,7 +247,7 @@ TEST_SUITE("TCPConnection") {
     TEST_CASE("user close and reconnect") {
         Listener listener;
         Reactor reactor;
-        TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
+        TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready;
@@ -282,7 +282,7 @@ TEST_SUITE("TCPConnection") {
     TEST_CASE("close() sends committed data first") {
         Listener listener;
         Reactor reactor;
-        TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}, .directSend = false}};
+        TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}, .directSend = false}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready;
@@ -302,7 +302,7 @@ TEST_SUITE("TCPConnection") {
     TEST_CASE("connect() is rejected while connected") {
         Listener listener;
         Reactor reactor;
-        TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
+        TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
         REQUIRE(conn.connect());
         auto const result = conn.connect();
         REQUIRE_FALSE(result);
@@ -312,7 +312,7 @@ TEST_SUITE("TCPConnection") {
     TEST_CASE("full rx ring applies backpressure and resumes after consume") {
         Listener listener;
         Reactor reactor;
-        TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}, .rxBufferSize = 4096}};
+        TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}, .rxBufferSize = 4096}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready;
@@ -356,7 +356,7 @@ TEST_SUITE("TCPConnection") {
             CAPTURE(directSend);
             Listener listener;
             Reactor reactor;
-            TCPConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()},
+            TcpConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), listener.port()},
                                             .txBufferSize = 1u << 20,
                                             .directSend = directSend,
                                             .socketSendBufferSize = 4096}};
@@ -402,7 +402,7 @@ TEST_SUITE("TCPConnection") {
     TEST_CASE("reactor can be created on one thread and polled on another") {
         Listener listener;
         auto reactor = std::make_unique<Reactor>(kReactorConfigs.back());
-        TCPConnection conn{*reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
+        TcpConnection conn{*reactor, {.endpoint = {IPv4Address::loopback(), listener.port()}}};
         REQUIRE(conn.connect());
 
         bool ready = false;

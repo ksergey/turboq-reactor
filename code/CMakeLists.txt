@@ -5,7 +5,7 @@
 #   IoUringBackend (IoUringBackend.h)               liburing
 #   TLSConnection, WebsocketConnection               OpenSSL (OpenSSL::SSL, OpenSSL::Crypto)
 #
-# Reactor<>, TCPConnection<>, ... use EpollBackend unless TURBOQ_REACTOR_IO_URING=1 is defined (for
+# Reactor<>, TcpConnection<>, ... use EpollBackend unless TURBOQ_REACTOR_IO_URING=1 is defined (for
 # the whole program), which makes io_uring the default backend.
 
 add_library(turboq-reactor INTERFACE)

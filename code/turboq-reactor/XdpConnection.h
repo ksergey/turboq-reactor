@@ -31,7 +31,7 @@
 namespace turboq::reactor {
 
 /// How the XDP program is attached to the interface.
-enum class XDPAttachMode : std::uint8_t {
+enum class XdpAttachMode : std::uint8_t {
     /// Native (driver) mode if the driver supports XDP, generic otherwise.
     Auto,
     /// Native mode only: frames are taken in the driver, before any skb is allocated.
@@ -42,7 +42,7 @@ enum class XDPAttachMode : std::uint8_t {
 };
 
 /// AF_XDP zero-copy: the NIC writes frames straight into the UMEM.
-enum class XDPZeroCopy : std::uint8_t {
+enum class XdpZeroCopy : std::uint8_t {
     /// Zero-copy if the driver supports it, copy mode otherwise.
     Prefer,
     /// Zero-copy or open() fails with Error::XdpZeroCopyUnavailable.
@@ -51,7 +51,7 @@ enum class XDPZeroCopy : std::uint8_t {
     Disable,
 };
 
-struct XDPOptions {
+struct XdpOptions {
     /// Interface to receive from.
     std::string interface;
     /// Receive queue of the interface. Frames arriving on other queues go to the kernel as usual:
@@ -79,13 +79,13 @@ struct XDPOptions {
     /// UMEM frame size: the largest frame received. Power of two, 2048 to the page size.
     unsigned frameSize = 4096;
 
-    XDPAttachMode attachMode = XDPAttachMode::Auto;
-    XDPZeroCopy zeroCopy = XDPZeroCopy::Prefer;
+    XdpAttachMode attachMode = XdpAttachMode::Auto;
+    XdpZeroCopy zeroCopy = XdpZeroCopy::Prefer;
 
     /// Hardware receive timestamps (FrameInfo::hardwareTimestamp) through XDP metadata
     /// (bpf_xdp_metadata_rx_timestamp, Linux 6.3+, native mode, drivers: mlx5, ice, igc, stmmac,
     /// veth, ...). Best effort: without support the frames have no timestamp (see
-    /// XDPConnection::hardwareTimestamps()). As with sockets, the NIC must have hardware RX
+    /// XdpConnection::hardwareTimestamps()). As with sockets, the NIC must have hardware RX
     /// timestamping enabled (SIOCSHWTSTAMP, hwstamp_ctl -r 1).
     bool hardwareTimestamps = false;
 
@@ -106,13 +106,13 @@ struct XDPOptions {
 struct FrameInfo {
     /// Wall clock time when the rx queue first saw the frame (one clock read per batch of frames).
     Timestamp receiveTime{};
-    /// NIC hardware receive timestamp, Timestamp{} if not available (XDPOptions::hardwareTimestamps).
+    /// NIC hardware receive timestamp, Timestamp{} if not available (XdpOptions::hardwareTimestamps).
     /// Taken by the NIC clock: comparable with the system clock only when synchronized (phc2sys).
     Timestamp hardwareTimestamp{};
 };
 
 /// Kernel counters of an AF_XDP socket (XDP_STATISTICS).
-struct XDPStatistics {
+struct XdpStatistics {
     /// Frames dropped for other reasons (e.g. larger than a UMEM frame).
     std::uint64_t dropped = 0;
     /// The rx queue was full: the user did not consume fast enough.
@@ -124,16 +124,16 @@ struct XDPStatistics {
 
 namespace detail {
 
-/// Implementation of XDPConnection (see there). Owned by the handle, released through the reactor.
+/// Implementation of XdpConnection (see there). Owned by the handle, released through the reactor.
 template <typename Backend>
-class XDPCore final : public IoHandler {
+class XdpCore final : public IoHandler {
 public:
     class Rx {
     private:
-        friend class XDPCore;
-        XDPCore* conn_;
+        friend class XdpCore;
+        XdpCore* conn_;
 
-        explicit Rx(XDPCore* conn) noexcept : conn_{conn} {}
+        explicit Rx(XdpCore* conn) noexcept : conn_{conn} {}
 
     public:
         /// The oldest received frame (Ethernet header included). Empty span if there is none.
@@ -191,7 +191,7 @@ private:
     };
 
     Backend& ring_;
-    XDPOptions options_;
+    XdpOptions options_;
 
     int fd_{-1};
     ConnectionState state_{ConnectionState::Idle};
@@ -224,10 +224,10 @@ private:
 public:
     Rx rx{this};
 
-    XDPCore(XDPCore const&) = delete;
-    XDPCore& operator=(XDPCore const&) = delete;
+    XdpCore(XdpCore const&) = delete;
+    XdpCore& operator=(XdpCore const&) = delete;
 
-    ~XDPCore() noexcept override;
+    ~XdpCore() noexcept override;
 
     auto open() -> std::expected<void, std::error_code>;
     void close() noexcept;
@@ -244,7 +244,7 @@ public:
         return diagnostic_;
     }
 
-    [[nodiscard]] auto options() const noexcept -> XDPOptions const& {
+    [[nodiscard]] auto options() const noexcept -> XdpOptions const& {
         return options_;
     }
 
@@ -260,18 +260,18 @@ public:
         return timestamps_;
     }
 
-    [[nodiscard]] auto statistics() const noexcept -> XDPStatistics;
+    [[nodiscard]] auto statistics() const noexcept -> XdpStatistics;
 
     [[nodiscard]] auto nativeHandle() const noexcept -> int {
         return fd_;
     }
 
 private:
-    XDPCore(Backend& ring, XDPOptions options);
+    XdpCore(Backend& ring, XdpOptions options);
 
 public:
     /// Validate options and allocate the UMEM. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, XDPOptions options) -> std::unique_ptr<XDPCore>;
+    [[nodiscard]] static auto create(Backend& ring, XdpOptions options) -> std::unique_ptr<XdpCore>;
 
 private:
     void onCompletion(OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -332,32 +332,32 @@ private:
 ///
 /// New frames are found by rx.empty()/rx.fetch() reading the kernel's ring directly, so a busy
 /// loop needs no Reactor::poll() at all; Reactor::wait() wakes up on new frames unless
-/// XDPOptions::wakeReactor is off. Headers are not parsed: the frame is yours.
+/// XdpOptions::wakeReactor is off. Headers are not parsed: the frame is yours.
 ///
 /// Requirements: CAP_NET_ADMIN and CAP_BPF (or root), Linux 5.9+ (5.11+ for busy polling, 6.3+
 /// for hardware timestamps). One XDP program per interface: open() fails with EBUSY if another
-/// one (or another XDPConnection on the same interface) is attached.
+/// one (or another XdpConnection on the same interface) is attached.
 template <typename Backend>
-class XDPConnection {
+class XdpConnection {
 private:
-    detail::CorePtr<detail::XDPCore<Backend>> core_;
+    detail::CorePtr<detail::XdpCore<Backend>> core_;
 
 public:
-    typename detail::XDPCore<Backend>::Rx rx;
+    typename detail::XdpCore<Backend>::Rx rx;
 
     /// Create a socket served by `reactor` (which must outlive it): allocates the UMEM. Does not
     /// open: call open(). Throws std::system_error on invalid options or allocation failure.
-    XDPConnection(Reactor<Backend>& reactor, XDPOptions options);
+    XdpConnection(Reactor<Backend>& reactor, XdpOptions options);
 
-    XDPConnection(XDPConnection const&) = delete;
-    XDPConnection& operator=(XDPConnection const&) = delete;
+    XdpConnection(XdpConnection const&) = delete;
+    XdpConnection& operator=(XdpConnection const&) = delete;
 
-    XDPConnection(XDPConnection&& other) noexcept = default;
+    XdpConnection(XdpConnection&& other) noexcept = default;
 
-    XDPConnection& operator=(XDPConnection&& other) noexcept = default;
+    XdpConnection& operator=(XdpConnection&& other) noexcept = default;
 
     /// Closes the socket and detaches the program if needed. Never blocks.
-    ~XDPConnection() noexcept = default;
+    ~XdpConnection() noexcept = default;
 
     /// Create the socket, attach the XDP program, join the groups. Synchronous: on success the
     /// connection is Ready, on failure Closed with error() set (and diagnostic() explaining
@@ -385,7 +385,7 @@ public:
         return core_->diagnostic();
     }
 
-    [[nodiscard]] auto options() const noexcept -> XDPOptions const& {
+    [[nodiscard]] auto options() const noexcept -> XdpOptions const& {
         return core_->options();
     }
 
@@ -405,7 +405,7 @@ public:
     }
 
     /// Kernel counters (a getsockopt() call). Zero when closed.
-    [[nodiscard]] auto statistics() const noexcept -> XDPStatistics {
+    [[nodiscard]] auto statistics() const noexcept -> XdpStatistics {
         return core_->statistics();
     }
 
@@ -417,4 +417,4 @@ public:
 
 } // namespace turboq::reactor
 
-#include <turboq-reactor/detail/XDPConnectionImpl.h>
+#include <turboq-reactor/detail/XdpConnectionImpl.h>

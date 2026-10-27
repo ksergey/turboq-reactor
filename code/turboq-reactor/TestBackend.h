@@ -11,9 +11,9 @@
 #include <vector>
 
 #include <turboq-reactor/Reactor.h>
-#include <turboq-reactor/TCPConnection.h>
-#include <turboq-reactor/UDPConnection.h>
-#include <turboq-reactor/XDPConnection.h>
+#include <turboq-reactor/TcpConnection.h>
+#include <turboq-reactor/UdpConnection.h>
+#include <turboq-reactor/XdpConnection.h>
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
 #include <turboq-reactor/TLSConnection.h>
 #include <turboq-reactor/WebsocketConnection.h>
@@ -42,14 +42,14 @@ inline constexpr std::uint16_t kFixedPortBase = 31300;
 #endif
 
 using Reactor = ::turboq::reactor::Reactor<TestBackend>;
-using TCPConnection = ::turboq::reactor::TCPConnection<TestBackend>;
-using UDPConnection = ::turboq::reactor::UDPConnection<TestBackend>;
+using TcpConnection = ::turboq::reactor::TcpConnection<TestBackend>;
+using UdpConnection = ::turboq::reactor::UdpConnection<TestBackend>;
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
 using TLSConnection = ::turboq::reactor::TLSConnection<TestBackend>;
 #endif
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
 using WebsocketConnection = ::turboq::reactor::WebsocketConnection<TestBackend>;
 #endif
-using XDPConnection = ::turboq::reactor::XDPConnection<TestBackend>;
+using XdpConnection = ::turboq::reactor::XdpConnection<TestBackend>;
 
 } // namespace turboq::reactor::testing

@@ -102,7 +102,7 @@ inline constexpr unsigned char kAlertCloseNotify = 0;
 // Construction and life cycle.
 
 template <typename Backend>
-auto TLSCore<Backend>::create(Backend& ring, TCPOptions tcp, TLSOptions tls) -> std::unique_ptr<TLSCore> {
+auto TLSCore<Backend>::create(Backend& ring, TcpOptions tcp, TLSOptions tls) -> std::unique_ptr<TLSCore> {
     validate(tcp);
     auto rxBuffer = allocateRing(tcp.rxBufferSize, "MirroredBuffer::create (rx)");
     auto txBuffer = allocateRing(tcp.txBufferSize, "MirroredBuffer::create (tx)");
@@ -117,7 +117,7 @@ auto TLSCore<Backend>::create(Backend& ring, TCPOptions tcp, TLSOptions tls) -> 
 }
 
 template <typename Backend>
-TLSCore<Backend>::TLSCore(Backend& ring, TCPOptions tcp, TLSOptions tls, MirroredBuffer rxBuffer,
+TLSCore<Backend>::TLSCore(Backend& ring, TcpOptions tcp, TLSOptions tls, MirroredBuffer rxBuffer,
     MirroredBuffer txBuffer, MirroredBuffer cipherRx, MirroredBuffer cipherTx) noexcept
     : Base{ring, std::move(tcp), std::move(rxBuffer), std::move(txBuffer)}, tlsOptions_{std::move(tls)},
       cipherRx_{std::move(cipherRx)}, cipherTx_{std::move(cipherTx)} {}
@@ -807,7 +807,7 @@ void TLSCore<Backend>::encryptPending() noexcept {
 } // namespace detail
 
 template <typename Backend>
-TLSConnection<Backend>::TLSConnection(Reactor<Backend>& reactor, TCPOptions tcp, TLSOptions tls)
+TLSConnection<Backend>::TLSConnection(Reactor<Backend>& reactor, TcpOptions tcp, TLSOptions tls)
     : core_{detail::TLSCore<Backend>::create(reactor.backend(), std::move(tcp), std::move(tls))}, rx{core_->rx},
       tx{core_->tx} {
     reactor.backend().attach(core_.get());

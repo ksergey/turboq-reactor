@@ -70,13 +70,13 @@ auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> std::un
         throw std::system_error{url.error(), "WebsocketCore"};
     }
     // The endpoint is resolved from the URL host on every connect().
-    TCPOptions tcpOptions{.endpoint = {},
+    TcpOptions tcpOptions{.endpoint = {},
         .rxBufferSize = options.rxBufferSize,
         .txBufferSize = options.txBufferSize,
         .connectTimeout = options.connectTimeout,
         .noDelay = options.noDelay,
         .directSend = options.directSend};
-    std::unique_ptr<TCPCore<Backend>> tcp;
+    std::unique_ptr<TcpCore<Backend>> tcp;
     TLSCore<Backend>* tls = nullptr;
     if (url->secure) {
         TLSOptions tlsOptions = options.tls;
@@ -87,7 +87,7 @@ auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> std::un
         tls = tlsCore.get();
         tcp = std::move(tlsCore);
     } else {
-        tcp = TCPCore<Backend>::create(ring, std::move(tcpOptions));
+        tcp = TcpCore<Backend>::create(ring, std::move(tcpOptions));
     }
     return std::unique_ptr<WebsocketCore>{
         new WebsocketCore{ring, std::move(tcp), tls, std::move(options), std::move(*url)}};
@@ -95,7 +95,7 @@ auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> std::un
 
 template <typename Backend>
 WebsocketCore<Backend>::WebsocketCore(
-    Backend& ring, std::unique_ptr<TCPCore<Backend>> tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url)
+    Backend& ring, std::unique_ptr<TcpCore<Backend>> tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url)
     : ring_{ring}, tcpCore_{std::move(tcp)}, tcp_{*tcpCore_}, tls_{tls}, options_{std::move(options)},
       url_{std::move(url)} {
     tcp_.setObserver(this);

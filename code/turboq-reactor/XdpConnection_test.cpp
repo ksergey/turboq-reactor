@@ -41,7 +41,7 @@ namespace {
 using namespace std::chrono_literals;
 using detail::UniqueFd;
 
-constexpr char const* kXdpSide = "xdp0";  // the XDPConnection attaches here
+constexpr char const* kXdpSide = "xdp0";  // the XdpConnection attaches here
 constexpr char const* kPeerSide = "xdp1"; // frames are injected here
 
 // ---------------------------------------------------------------------------------------------
@@ -307,7 +307,7 @@ template <typename Pred>
 }
 
 /// The last bytes of each received frame (the markers), consumed.
-[[nodiscard]] auto drain(XDPConnection& conn, std::size_t markerSize) -> std::vector<std::string> {
+[[nodiscard]] auto drain(XdpConnection& conn, std::size_t markerSize) -> std::vector<std::string> {
     std::vector<std::string> seen;
     while (!conn.rx.empty()) {
         auto const frame = conn.rx.fetch();
@@ -318,7 +318,7 @@ template <typename Pred>
     return seen;
 }
 
-[[nodiscard]] auto openOrSkip(XDPConnection& conn) -> bool {
+[[nodiscard]] auto openOrSkip(XdpConnection& conn) -> bool {
     auto result = conn.open();
     if (!result) {
         MESSAGE("open failed: ", result.error().message(), " | ", conn.diagnostic());
@@ -328,12 +328,12 @@ template <typename Pred>
 
 } // namespace
 
-TEST_SUITE("XDPConnection") {
+TEST_SUITE("XdpConnection") {
 
     TEST_CASE("invalid options") {
         Reactor reactor{kReactorConfigs.front()};
-        auto const make = [&](XDPOptions options) {
-            XDPConnection conn{reactor, std::move(options)};
+        auto const make = [&](XdpOptions options) {
+            XdpConnection conn{reactor, std::move(options)};
         };
         REQUIRE_THROWS(make({.interface = "", .udpPorts = {1}}));
         REQUIRE_THROWS(make({.interface = "x"}));                                       // no ports, no redirectAll
@@ -343,7 +343,7 @@ TEST_SUITE("XDPConnection") {
         REQUIRE_THROWS(make({.interface = "x", .udpPorts = {1}, .groups = {IPAddress{IPv4Address{10, 0, 0, 1}}}}));
         REQUIRE_NOTHROW(make({.interface = "x", .udpPorts = {1}}));
 
-        XDPConnection missing{reactor, {.interface = "no-such-if0", .udpPorts = {1}}};
+        XdpConnection missing{reactor, {.interface = "no-such-if0", .udpPorts = {1}}};
         REQUIRE_FALSE(missing.open());
         REQUIRE_EQ(missing.state(), ConnectionState::Closed);
     }
@@ -355,7 +355,7 @@ TEST_SUITE("XDPConnection") {
         for (auto const& config : kReactorConfigs) {
             CAPTURE(&config - kReactorConfigs.data());
             Reactor reactor{config};
-            XDPConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30001, 30002}, .frameCount = 64}};
+            XdpConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30001, 30002}, .frameCount = 64}};
             if (!openOrSkip(conn)) {
                 return;
             }
@@ -403,7 +403,7 @@ TEST_SUITE("XDPConnection") {
             return;
         }
         Reactor reactor{kReactorConfigs.front()};
-        XDPConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30010}, .hardwareTimestamps = true}};
+        XdpConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30010}, .hardwareTimestamps = true}};
         if (!openOrSkip(conn)) {
             return;
         }
@@ -433,7 +433,7 @@ TEST_SUITE("XDPConnection") {
             return;
         }
         Reactor reactor{kReactorConfigs.front()};
-        XDPConnection conn{reactor, {.interface = kXdpSide, .redirectAll = true}};
+        XdpConnection conn{reactor, {.interface = kXdpSide, .redirectAll = true}};
         if (!openOrSkip(conn)) {
             return;
         }
@@ -459,7 +459,7 @@ TEST_SUITE("XDPConnection") {
             return;
         }
         Reactor reactor{kReactorConfigs.front()};
-        XDPConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30020}}};
+        XdpConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30020}}};
         if (!openOrSkip(conn)) {
             return;
         }
@@ -483,7 +483,7 @@ TEST_SUITE("XDPConnection") {
             return;
         }
         Reactor reactor{kReactorConfigs.front()};
-        XDPConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30030}, .frameCount = 64}};
+        XdpConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30030}, .frameCount = 64}};
         if (!openOrSkip(conn)) {
             return;
         }
@@ -512,12 +512,12 @@ TEST_SUITE("XDPConnection") {
             return;
         }
         Reactor reactor{kReactorConfigs.front()};
-        XDPConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30040}}};
+        XdpConnection conn{reactor, {.interface = kXdpSide, .udpPorts = {30040}}};
         if (!openOrSkip(conn)) {
             return;
         }
         // One program per interface: a second connection can't attach.
-        XDPConnection second{reactor, {.interface = kXdpSide, .udpPorts = {30041}}};
+        XdpConnection second{reactor, {.interface = kXdpSide, .udpPorts = {30041}}};
         REQUIRE_FALSE(second.open());
         REQUIRE_EQ(second.state(), ConnectionState::Closed);
 
@@ -552,15 +552,15 @@ TEST_SUITE("XDPConnection") {
         Reactor reactor{kReactorConfigs.front()};
 
         // veth has no zero-copy support.
-        XDPConnection zeroCopy{reactor, {.interface = kXdpSide, .udpPorts = {30050}, .zeroCopy = XDPZeroCopy::Require}};
+        XdpConnection zeroCopy{reactor, {.interface = kXdpSide, .udpPorts = {30050}, .zeroCopy = XdpZeroCopy::Require}};
         auto const result = zeroCopy.open();
         REQUIRE_FALSE(result);
         REQUIRE_EQ(result.error(), makeErrorCode(Error::XdpZeroCopyUnavailable));
 
-        XDPConnection generic{reactor, {.interface = kXdpSide,
+        XdpConnection generic{reactor, {.interface = kXdpSide,
                                            .udpPorts = {30050},
                                            .groups = {IPAddress{IPv4Address{239, 255, 40, 1}}},
-                                           .attachMode = XDPAttachMode::Generic,
+                                           .attachMode = XdpAttachMode::Generic,
                                            .busyPoll = std::chrono::microseconds{50}}};
         if (!openOrSkip(generic)) {
             return;
@@ -579,12 +579,12 @@ TEST_SUITE("XDPConnection") {
             return;
         }
         auto reactor = std::make_unique<Reactor>(kReactorConfigs.back());
-        std::vector<XDPConnection> connections;
-        connections.emplace_back(*reactor, XDPOptions{.interface = kXdpSide, .udpPorts = {30060}});
+        std::vector<XdpConnection> connections;
+        connections.emplace_back(*reactor, XdpOptions{.interface = kXdpSide, .udpPorts = {30060}});
         if (!openOrSkip(connections.front())) {
             return;
         }
-        XDPConnection moved = std::move(connections.front());
+        XdpConnection moved = std::move(connections.front());
         connections.clear();
         REQUIRE_EQ(moved.state(), ConnectionState::Ready);
         Injector{}.send(udp4(30060, "#h1"));

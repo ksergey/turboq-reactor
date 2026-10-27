@@ -17,7 +17,7 @@
 #include <system_error>
 #include <utility>
 
-#include <turboq-reactor/TCPConnection.h>
+#include <turboq-reactor/TcpConnection.h>
 #include <turboq-reactor/TLSOptions.h>
 
 struct ssl_st;
@@ -29,11 +29,11 @@ namespace turboq::reactor {
 
 namespace detail {
 
-/// Implementation of TLSConnection (see there): TLS as a layer on top of TCPCore.
+/// Implementation of TLSConnection (see there): TLS as a layer on top of TcpCore.
 template <typename Backend>
-class TLSCore final : public TCPCore<Backend> {
+class TLSCore final : public TcpCore<Backend> {
 private:
-    using Base = TCPCore<Backend>;
+    using Base = TcpCore<Backend>;
     using Base::allocateRing;
     using Base::checkClosed;
     using Base::drainOnClose;
@@ -87,7 +87,7 @@ public:
     ~TLSCore() noexcept override;
 
     /// Validate options, allocate the rings. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, TCPOptions tcp, TLSOptions tls) -> std::unique_ptr<TLSCore>;
+    [[nodiscard]] static auto create(Backend& ring, TcpOptions tcp, TLSOptions tls) -> std::unique_ptr<TLSCore>;
 
     [[nodiscard]] auto tlsOptions() const noexcept -> TLSOptions const& {
         return tlsOptions_;
@@ -112,13 +112,13 @@ public:
     }
 
 private:
-    TLSCore(Backend& ring, TCPOptions tcp, TLSOptions tls, MirroredBuffer rxBuffer, MirroredBuffer txBuffer,
+    TLSCore(Backend& ring, TcpOptions tcp, TLSOptions tls, MirroredBuffer rxBuffer, MirroredBuffer txBuffer,
         MirroredBuffer cipherRx, MirroredBuffer cipherTx) noexcept;
 
     void onCompletion(OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
     void onTxReady() noexcept override;
 
-    // TCPCore hooks.
+    // TcpCore hooks.
     void onConnected() noexcept override;
     void armRecv() noexcept override;
     void resumeRecv() noexcept override;
@@ -156,7 +156,7 @@ private:
 
 } // namespace detail
 
-/// TLS client connection: the same two byte queues as TCPConnection, carrying plaintext.
+/// TLS client connection: the same two byte queues as TcpConnection, carrying plaintext.
 ///
 /// OpenSSL performs the handshake (state Handshaking). Then, preferably, the kernel (kTLS) takes
 /// over: the data path is exactly the plain TCP one. When it can't (no `tls` module, OpenSSL built
@@ -169,12 +169,12 @@ private:
     detail::CorePtr<detail::TLSCore<Backend>> core_;
 
 public:
-    typename detail::TCPCore<Backend>::Rx rx;
-    typename detail::TCPCore<Backend>::Tx tx;
+    typename detail::TcpCore<Backend>::Rx rx;
+    typename detail::TcpCore<Backend>::Tx tx;
 
     /// Create a connection served by `reactor` (which must outlive it). Does not connect: call
     /// connect(). Throws std::system_error on invalid options or if the rings can't be allocated.
-    TLSConnection(Reactor<Backend>& reactor, TCPOptions tcp, TLSOptions tls = {});
+    TLSConnection(Reactor<Backend>& reactor, TcpOptions tcp, TLSOptions tls = {});
 
     TLSConnection(TLSConnection const&) = delete;
     TLSConnection& operator=(TLSConnection const&) = delete;
@@ -185,7 +185,7 @@ public:
 
     TLSConnection& operator=(TLSConnection&& other) noexcept = default;
 
-    /// Sends close_notify if Ready and closes. Never blocks (see TCPConnection::~TCPConnection()).
+    /// Sends close_notify if Ready and closes. Never blocks (see TcpConnection::~TcpConnection()).
     ~TLSConnection() noexcept = default;
 
     /// Connect and handshake: Connecting -> Handshaking -> Ready. Allowed in Idle and Closed states
@@ -209,7 +209,7 @@ public:
         return core_->error();
     }
 
-    [[nodiscard]] auto options() const noexcept -> TCPOptions const& {
+    [[nodiscard]] auto options() const noexcept -> TcpOptions const& {
         return core_->options();
     }
 
