@@ -11,7 +11,7 @@
 ## Library
 
 Header-only, one target: `turboq::reactor`, which depends on [turboq](https://github.com/ksergey/turboq)
-only. Headers are included as `<turboq/reactor/...>`; parts that need another library are only
+only. Headers are included as `<turboq-reactor/...>`; parts that need another library are only
 compiled when used, and then that library has to be linked by you:
 
 | header | needs |
@@ -28,6 +28,10 @@ whole program) to make io_uring the default, or name the backend: `Reactor<IoUri
 Linux 6.1+ (also the kernel headers to build against), glibc 2.35+, a C++23 compiler (GCC 15+,
 Clang 20+ with libstdc++ 15+), CMake 3.24+. For kernel TLS:
 `sudo modprobe tls` (otherwise TLS runs in OpenSSL in userspace).
+
+These are not checked at CMake configure time; the requirements apply to any translation unit that
+compiles the header-only library (it calls `::epoll_pwait2`): on older glibc / kernel headers the
+build fails with a compile error in `turboq-reactor/detail/EpollBackendImpl.h`.
 
 ## Integration
 
@@ -50,7 +54,7 @@ target_link_libraries(your_app PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 ```cpp
 #include <print>
-#include <turboq/reactor/WebsocketConnection.h>
+#include <turboq-reactor/WebsocketConnection.h>
 
 using namespace turboq::reactor;
 
@@ -82,7 +86,7 @@ backoff, a liveness watchdog and graceful shutdown.
 and prints each datagram with its NIC, kernel and user receive timestamps.
 
 The backend is a template parameter. To pick it explicitly declare `Reactor<IoUringBackend> reactor;`
-(with `#include <turboq/reactor/IoUringBackend.h>` and liburing linked) or `Reactor<EpollBackend>` — connections deduce the backend from the reactor they are given
+(with `#include <turboq-reactor/IoUringBackend.h>` and liburing linked) or `Reactor<EpollBackend>` — connections deduce the backend from the reactor they are given
 (`TCPConnection conn{reactor, {...}}`); as class members write `TCPConnection<>` (the default
 backend) or `TCPConnection<EpollBackend>`.
 

@@ -29,8 +29,8 @@
 #include <cxxopts.hpp>
 
 #include <turboq/Utils.h>
-#include <turboq/reactor/Reactor.h>
-#include <turboq/reactor/TCPConnection.h>
+#include <turboq-reactor/Reactor.h>
+#include <turboq-reactor/TCPConnection.h>
 
 namespace {
 

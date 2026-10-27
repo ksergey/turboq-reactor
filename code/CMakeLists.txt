@@ -27,7 +27,7 @@ target_link_libraries(turboq-reactor
     INTERFACE turboq::turboq)
 
 if (turboq_reactor_BUILD_TESTS)
-    file(GLOB Tests CONFIGURE_DEPENDS turboq/reactor/*_test.cpp)
+    file(GLOB Tests CONFIGURE_DEPENDS turboq-reactor/*_test.cpp)
     if (NOT TARGET OpenSSL::SSL)
         # TLS and WebSocket need OpenSSL; other tests skip their TLS/WebSocket parts.
         list(FILTER Tests EXCLUDE REGEX "(TLS|Websocket)Connection_test\\.cpp$")

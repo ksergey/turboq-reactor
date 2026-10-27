@@ -32,8 +32,8 @@
 
 #include <cxxopts.hpp>
 
-#include <turboq/reactor/Reactor.h>
-#include <turboq/reactor/XDPConnection.h>
+#include <turboq-reactor/Reactor.h>
+#include <turboq-reactor/XDPConnection.h>
 
 namespace {
 

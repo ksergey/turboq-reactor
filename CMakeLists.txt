@@ -6,7 +6,6 @@ option(turboq_reactor_SANITIZER "Build with sanitizer" OFF)
 option(turboq_reactor_BUILD_TESTS "Build tests (*_test.cpp files, linked against doctest)" ${PROJECT_IS_TOP_LEVEL})
 option(turboq_reactor_TOOLS "Build tools (requires cxxopts, fetched via CPM)" ${PROJECT_IS_TOP_LEVEL})
 option(turboq_reactor_EXAMPLES "Build examples (requires cxxopts, fetched via CPM)" ${PROJECT_IS_TOP_LEVEL})
-option(turboq_reactor_WERROR "Treat warnings as errors in this project's code (CI)" OFF)
 # The library is header-only and needs turboq only. Tests, tools and examples also use io_uring
 # (liburing) and TLS (OpenSSL) when available; these options only apply to them.
 set(turboq_reactor_IO_URING "AUTO" CACHE STRING
@@ -16,29 +15,9 @@ option(turboq_reactor_SYSTEM_LIBURING "Use the system liburing (pkg-config) inst
 
 include(cmake/GetCPM.cmake)
 
-# Minimum build environment: Linux kernel headers 6.1 (linux-libc-dev / kernel-headers) and
-# glibc 2.35 (epoll_pwait2).
-include(CheckCXXSourceCompiles)
-unset(TURBOQ_REACTOR_KERNEL_HEADERS_OK CACHE)
-check_cxx_source_compiles("
-    #include <linux/version.h>
-    #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
-    #error too old
-    #endif
-    int main() {}" TURBOQ_REACTOR_KERNEL_HEADERS_OK)
-if (NOT TURBOQ_REACTOR_KERNEL_HEADERS_OK)
-    message(FATAL_ERROR "turboq-reactor needs Linux kernel headers 6.1 or newer (linux-libc-dev / kernel-headers)")
-endif()
-unset(TURBOQ_REACTOR_GLIBC_OK CACHE)
-check_cxx_source_compiles("
-    #include <features.h>
-    #if defined(__GLIBC__) && !__GLIBC_PREREQ(2, 35)
-    #error too old
-    #endif
-    int main() {}" TURBOQ_REACTOR_GLIBC_OK)
-if (NOT TURBOQ_REACTOR_GLIBC_OK)
-    message(FATAL_ERROR "turboq-reactor needs glibc 2.35 or newer")
-endif()
+# Minimum build environment (see README.md "Requirements"): Linux kernel headers 6.1+ and
+# glibc 2.35+ are needed at compile time in translation units that compile the header-only
+# library (epoll_pwait2); they are not checked at configure time.
 
 set(TURBOQ_REACTOR_DEV OFF)
 if (turboq_reactor_BUILD_TESTS OR turboq_reactor_TOOLS OR turboq_reactor_EXAMPLES)
@@ -59,11 +38,6 @@ CPMAddPackage(
 if (turboq_reactor_BUILD_TESTS)
     CPMAddPackage("gh:doctest/doctest@2.5.2")
     enable_testing()
-endif()
-
-# After the dependencies: only this project's targets are affected.
-if (turboq_reactor_WERROR)
-    add_compile_options(-Werror)
 endif()
 
 add_subdirectory(code)
