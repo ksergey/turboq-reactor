@@ -11,7 +11,7 @@
 
 namespace turboq::reactor {
 
-enum class TLSVersion : std::uint8_t { Tls12, Tls13 };
+enum class TlsVersion : std::uint8_t { Tls12, Tls13 };
 
 /// What to do when the kernel can't take over a TLS session (kTLS).
 enum class KernelTls : std::uint8_t {
@@ -26,7 +26,7 @@ enum class KernelTls : std::uint8_t {
 /// Which directions of an established TLS session the kernel handles.
 enum class KernelTlsOffload : std::uint8_t { None, SendOnly, ReceiveOnly, Full };
 
-struct TLSOptions {
+struct TlsOptions {
     /// SNI and the host name the certificate is verified against. None (or a numeric address):
     /// no SNI, the certificate must list the IP address (TcpOptions::endpoint) in its SANs.
     std::optional<std::string> serverName{};
@@ -34,8 +34,8 @@ struct TLSOptions {
     /// Trusted CAs (PEM file, hashed directory). Both none: the system default store.
     std::optional<std::string> caFile{};
     std::optional<std::string> caPath{};
-    TLSVersion minVersion = TLSVersion::Tls12;
-    TLSVersion maxVersion = TLSVersion::Tls13;
+    TlsVersion minVersion = TlsVersion::Tls12;
+    TlsVersion maxVersion = TlsVersion::Tls13;
     std::chrono::milliseconds handshakeTimeout{5000};
     KernelTls kernelTls = KernelTls::Prefer;
 };

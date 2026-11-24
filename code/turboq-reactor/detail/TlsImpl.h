@@ -22,7 +22,7 @@
 #include <string>
 
 #include <turboq-reactor/Error.h>
-#include <turboq-reactor/TLSOptions.h>
+#include <turboq-reactor/TlsOptions.h>
 
 namespace turboq::reactor {
 namespace detail::tls {
@@ -217,7 +217,7 @@ inline auto popTlsError(std::error_code fallback) noexcept -> std::error_code {
     return {value, getTlsErrorCategory()};
 }
 
-inline auto createClientContext(TLSOptions const& options) noexcept -> std::expected<ssl_ctx_st*, std::error_code> {
+inline auto createClientContext(TlsOptions const& options) noexcept -> std::expected<ssl_ctx_st*, std::error_code> {
     SSL_CTX* ctx = ::SSL_CTX_new(::TLS_client_method());
     if (!ctx) {
         return std::unexpected(popTlsError(makeErrorCode(Error::TlsHandshakeFailed)));
@@ -227,8 +227,8 @@ inline auto createClientContext(TLSOptions const& options) noexcept -> std::expe
         return std::unexpected(popTlsError(makeErrorCode(Error::InvalidOptions)));
     };
 
-    int const minVersion = options.minVersion == TLSVersion::Tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
-    int const maxVersion = options.maxVersion == TLSVersion::Tls12 ? TLS1_2_VERSION : TLS1_3_VERSION;
+    int const minVersion = options.minVersion == TlsVersion::Tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
+    int const maxVersion = options.maxVersion == TlsVersion::Tls12 ? TLS1_2_VERSION : TLS1_3_VERSION;
     if (minVersion > maxVersion || ::SSL_CTX_set_min_proto_version(ctx, minVersion) != 1 ||
         ::SSL_CTX_set_max_proto_version(ctx, maxVersion) != 1) {
         return fail();

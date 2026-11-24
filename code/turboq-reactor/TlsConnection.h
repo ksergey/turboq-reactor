@@ -18,7 +18,7 @@
 #include <utility>
 
 #include <turboq-reactor/TcpConnection.h>
-#include <turboq-reactor/TLSOptions.h>
+#include <turboq-reactor/TlsOptions.h>
 
 struct ssl_st;
 struct ssl_ctx_st;
@@ -29,9 +29,9 @@ namespace turboq::reactor {
 
 namespace detail {
 
-/// Implementation of TLSConnection (see there): TLS as a layer on top of TcpCore.
+/// Implementation of TlsConnection (see there): TLS as a layer on top of TcpCore.
 template <typename Backend>
-class TLSCore final : public TcpCore<Backend> {
+class TlsCore final : public TcpCore<Backend> {
 private:
     using Base = TcpCore<Backend>;
     using Base::allocateRing;
@@ -58,7 +58,7 @@ private:
     using Base::txDirty_;
     using Base::validate;
 
-    TLSOptions tlsOptions_;
+    TlsOptions tlsOptions_;
 
     // With full kernel offload ssl_ lives only during the handshake; with userspace TLS in either
     // direction it stays until the next connect() (rx draining continues after a close).
@@ -84,12 +84,12 @@ private:
     alignas(cmsghdr) unsigned char recvControl_[CMSG_SPACE(sizeof(unsigned char))]{};
 
 public:
-    ~TLSCore() noexcept override;
+    ~TlsCore() noexcept override;
 
     /// Validate options, allocate the rings. Throws std::system_error.
-    [[nodiscard]] static auto create(Backend& ring, TcpOptions tcp, TLSOptions tls) -> std::unique_ptr<TLSCore>;
+    [[nodiscard]] static auto create(Backend& ring, TcpOptions tcp, TlsOptions tls) -> std::unique_ptr<TlsCore>;
 
-    [[nodiscard]] auto tlsOptions() const noexcept -> TLSOptions const& {
+    [[nodiscard]] auto tlsOptions() const noexcept -> TlsOptions const& {
         return tlsOptions_;
     }
 
@@ -112,7 +112,7 @@ public:
     }
 
 private:
-    TLSCore(Backend& ring, TcpOptions tcp, TLSOptions tls, MirroredBuffer rxBuffer, MirroredBuffer txBuffer,
+    TlsCore(Backend& ring, TcpOptions tcp, TlsOptions tls, MirroredBuffer rxBuffer, MirroredBuffer txBuffer,
         MirroredBuffer cipherRx, MirroredBuffer cipherTx) noexcept;
 
     void onCompletion(OpCode op, std::int32_t res, std::uint32_t flags) noexcept override;
@@ -162,11 +162,11 @@ private:
 /// over: the data path is exactly the plain TCP one. When it can't (no `tls` module, OpenSSL built
 /// without ktls), OpenSSL keeps encrypting and decrypting in userspace between the socket and the
 /// same rings: one more copy per direction and the crypto on the polling thread, nothing else
-/// changes. See TLSOptions::kernelTls, kernelTlsOffload().
+/// changes. See TlsOptions::kernelTls, kernelTlsOffload().
 template <typename Backend>
-class TLSConnection {
+class TlsConnection {
 private:
-    detail::CorePtr<detail::TLSCore<Backend>> core_;
+    detail::CorePtr<detail::TlsCore<Backend>> core_;
 
 public:
     typename detail::TcpCore<Backend>::Rx rx;
@@ -174,19 +174,19 @@ public:
 
     /// Create a connection served by `reactor` (which must outlive it). Does not connect: call
     /// connect(). Throws std::system_error on invalid options or if the rings can't be allocated.
-    TLSConnection(Reactor<Backend>& reactor, TcpOptions tcp, TLSOptions tls = {});
+    TlsConnection(Reactor<Backend>& reactor, TcpOptions tcp, TlsOptions tls = {});
 
-    TLSConnection(TLSConnection const&) = delete;
-    TLSConnection& operator=(TLSConnection const&) = delete;
+    TlsConnection(TlsConnection const&) = delete;
+    TlsConnection& operator=(TlsConnection const&) = delete;
 
     /// Moves the connection, in-flight operations included. The moved-from object may only be
     /// destroyed or assigned to.
-    TLSConnection(TLSConnection&& other) noexcept = default;
+    TlsConnection(TlsConnection&& other) noexcept = default;
 
-    TLSConnection& operator=(TLSConnection&& other) noexcept = default;
+    TlsConnection& operator=(TlsConnection&& other) noexcept = default;
 
     /// Sends close_notify if Ready and closes. Never blocks (see TcpConnection::~TcpConnection()).
-    ~TLSConnection() noexcept = default;
+    ~TlsConnection() noexcept = default;
 
     /// Connect and handshake: Connecting -> Handshaking -> Ready. Allowed in Idle and Closed states
     /// (i.e. this is also "reconnect"). Clears both queues.
@@ -213,7 +213,7 @@ public:
         return core_->options();
     }
 
-    [[nodiscard]] auto tlsOptions() const noexcept -> TLSOptions const& {
+    [[nodiscard]] auto tlsOptions() const noexcept -> TlsOptions const& {
         return core_->tlsOptions();
     }
 
@@ -242,4 +242,4 @@ public:
 
 } // namespace turboq::reactor
 
-#include <turboq-reactor/detail/TLSConnectionImpl.h>
+#include <turboq-reactor/detail/TlsConnectionImpl.h>

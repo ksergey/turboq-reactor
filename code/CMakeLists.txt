@@ -3,7 +3,7 @@
 # Parts that need other libraries are only compiled when used, and then need that library linked
 # by the user:
 #   IoUringBackend (IoUringBackend.h)               liburing
-#   TLSConnection, WebsocketConnection               OpenSSL (OpenSSL::SSL, OpenSSL::Crypto)
+#   TlsConnection, WebsocketConnection               OpenSSL (OpenSSL::SSL, OpenSSL::Crypto)
 #
 # Reactor<>, TcpConnection<>, ... use EpollBackend unless TURBOQ_REACTOR_IO_URING=1 is defined (for
 # the whole program), which makes io_uring the default backend.
@@ -30,7 +30,7 @@ if (turboq_reactor_BUILD_TESTS)
     file(GLOB Tests CONFIGURE_DEPENDS turboq-reactor/*_test.cpp)
     if (NOT TARGET OpenSSL::SSL)
         # TLS and WebSocket need OpenSSL; other tests skip their TLS/WebSocket parts.
-        list(FILTER Tests EXCLUDE REGEX "(TLS|Websocket)Connection_test\\.cpp$")
+        list(FILTER Tests EXCLUDE REGEX "(Tls|Websocket)Connection_test\\.cpp$")
     endif()
 
     TurboQAddTestsFromSourceList(Tests

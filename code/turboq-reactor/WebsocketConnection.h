@@ -23,7 +23,7 @@
 
 #include <turboq-reactor/Forward.h>
 #include <turboq-reactor/TcpConnection.h>
-#include <turboq-reactor/TLSConnection.h>
+#include <turboq-reactor/TlsConnection.h>
 #include <turboq-reactor/Types.h>
 #include <turboq-reactor/detail/IoHandler.h>
 #include <turboq-reactor/detail/StreamObserver.h>
@@ -56,7 +56,7 @@ struct WsOptions {
     /// Sec-WebSocket-Protocol to request; the server must accept it. None: no subprotocol.
     std::optional<std::string> subprotocol{};
     /// TLS settings for wss:// (ignored for ws://).
-    TLSOptions tls{};
+    TlsOptions tls{};
 
     /// Underlying TCP rings. The largest message (all its fragments, plus unconsumed messages
     /// before it) must fit into the rx ring.
@@ -186,7 +186,7 @@ private:
     Backend& ring_;
     std::unique_ptr<TcpCore<Backend>> tcpCore_; // owned: lives and dies with this connection
     TcpCore<Backend>& tcp_;
-    TLSCore<Backend>* tls_; // the same object as tcp_ for wss://, nullptr for ws://
+    TlsCore<Backend>* tls_; // the same object as tcp_ for wss://, nullptr for ws://
     WsOptions options_;
     WsUrl url_;
 
@@ -296,7 +296,7 @@ public:
 
 private:
     WebsocketCore(
-        Backend& ring, std::unique_ptr<TcpCore<Backend>> tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url);
+        Backend& ring, std::unique_ptr<TcpCore<Backend>> tcp, TlsCore<Backend>* tls, WsOptions options, WsUrl url);
 
 public:
     /// Parse the URL, create the TCP layer. Throws std::system_error.

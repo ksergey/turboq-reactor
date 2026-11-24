@@ -28,7 +28,7 @@ class Reactor;
 template <typename Backend = DefaultBackend>
 class TcpConnection;
 template <typename Backend = DefaultBackend>
-class TLSConnection;
+class TlsConnection;
 template <typename Backend = DefaultBackend>
 class UdpConnection;
 template <typename Backend = DefaultBackend>

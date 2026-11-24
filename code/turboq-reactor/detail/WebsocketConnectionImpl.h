@@ -77,13 +77,13 @@ auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> std::un
         .noDelay = options.noDelay,
         .directSend = options.directSend};
     std::unique_ptr<TcpCore<Backend>> tcp;
-    TLSCore<Backend>* tls = nullptr;
+    TlsCore<Backend>* tls = nullptr;
     if (url->secure) {
-        TLSOptions tlsOptions = options.tls;
+        TlsOptions tlsOptions = options.tls;
         if (!tlsOptions.serverName) {
             tlsOptions.serverName = url->host; // SNI + verification (by IP for a numeric host)
         }
-        auto tlsCore = TLSCore<Backend>::create(ring, std::move(tcpOptions), std::move(tlsOptions));
+        auto tlsCore = TlsCore<Backend>::create(ring, std::move(tcpOptions), std::move(tlsOptions));
         tls = tlsCore.get();
         tcp = std::move(tlsCore);
     } else {
@@ -95,7 +95,7 @@ auto WebsocketCore<Backend>::create(Backend& ring, WsOptions options) -> std::un
 
 template <typename Backend>
 WebsocketCore<Backend>::WebsocketCore(
-    Backend& ring, std::unique_ptr<TcpCore<Backend>> tcp, TLSCore<Backend>* tls, WsOptions options, WsUrl url)
+    Backend& ring, std::unique_ptr<TcpCore<Backend>> tcp, TlsCore<Backend>* tls, WsOptions options, WsUrl url)
     : ring_{ring}, tcpCore_{std::move(tcp)}, tcp_{*tcpCore_}, tls_{tls}, options_{std::move(options)},
       url_{std::move(url)} {
     tcp_.setObserver(this);

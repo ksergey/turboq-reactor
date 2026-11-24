@@ -1,7 +1,7 @@
 // Copyright (c) Sergey Kovalevich <inndie@gmail.com>
 // SPDX-License-Identifier: MIT
 
-// Implementation of TLSConnection.h (templates), included at its end.
+// Implementation of TlsConnection.h (templates), included at its end.
 
 #pragma once
 
@@ -102,7 +102,7 @@ inline constexpr unsigned char kAlertCloseNotify = 0;
 // Construction and life cycle.
 
 template <typename Backend>
-auto TLSCore<Backend>::create(Backend& ring, TcpOptions tcp, TLSOptions tls) -> std::unique_ptr<TLSCore> {
+auto TlsCore<Backend>::create(Backend& ring, TcpOptions tcp, TlsOptions tls) -> std::unique_ptr<TlsCore> {
     validate(tcp);
     auto rxBuffer = allocateRing(tcp.rxBufferSize, "MirroredBuffer::create (rx)");
     auto txBuffer = allocateRing(tcp.txBufferSize, "MirroredBuffer::create (tx)");
@@ -112,18 +112,18 @@ auto TLSCore<Backend>::create(Backend& ring, TcpOptions tcp, TLSOptions tls) -> 
         cipherRx = allocateRing(std::max(tcp.rxBufferSize, kMinCipherRingSize), "MirroredBuffer::create (TLS rx)");
         cipherTx = allocateRing(std::max(tcp.txBufferSize, kMinCipherRingSize), "MirroredBuffer::create (TLS tx)");
     }
-    return std::unique_ptr<TLSCore>{new TLSCore{ring, std::move(tcp), std::move(tls), std::move(rxBuffer),
+    return std::unique_ptr<TlsCore>{new TlsCore{ring, std::move(tcp), std::move(tls), std::move(rxBuffer),
         std::move(txBuffer), std::move(cipherRx), std::move(cipherTx)}};
 }
 
 template <typename Backend>
-TLSCore<Backend>::TLSCore(Backend& ring, TcpOptions tcp, TLSOptions tls, MirroredBuffer rxBuffer,
+TlsCore<Backend>::TlsCore(Backend& ring, TcpOptions tcp, TlsOptions tls, MirroredBuffer rxBuffer,
     MirroredBuffer txBuffer, MirroredBuffer cipherRx, MirroredBuffer cipherTx) noexcept
     : Base{ring, std::move(tcp), std::move(rxBuffer), std::move(txBuffer)}, tlsOptions_{std::move(tls)},
       cipherRx_{std::move(cipherRx)}, cipherTx_{std::move(cipherTx)} {}
 
 template <typename Backend>
-TLSCore<Backend>::~TLSCore() noexcept {
+TlsCore<Backend>::~TlsCore() noexcept {
     this->releaseSsl();
     if (sslContext_) {
         freeContext(sslContext_);
@@ -131,7 +131,7 @@ TLSCore<Backend>::~TLSCore() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::resetSession() noexcept {
+void TlsCore<Backend>::resetSession() noexcept {
     tlsActive_ = false;
     tlsUserRx_ = false;
     tlsUserTx_ = false;
@@ -145,7 +145,7 @@ void TLSCore<Backend>::resetSession() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::releaseSsl() noexcept {
+void TlsCore<Backend>::releaseSsl() noexcept {
     if (ssl_) {
         freeSsl(ssl_);
         ssl_ = nullptr;
@@ -153,7 +153,7 @@ void TLSCore<Backend>::releaseSsl() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onCompletion(OpCode op, std::int32_t res, std::uint32_t flags) noexcept {
+void TlsCore<Backend>::onCompletion(OpCode op, std::int32_t res, std::uint32_t flags) noexcept {
     switch (op) {
     case OpCode::Poll:
         assert(inflight_ > 0);
@@ -191,14 +191,14 @@ void TLSCore<Backend>::onCompletion(OpCode op, std::int32_t res, std::uint32_t f
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onClosed() noexcept {
+void TlsCore<Backend>::onClosed() noexcept {
     if (!tlsUserRx_) {
         this->releaseSsl(); // with userspace rx, kept so that consume() can drain what arrived
     }
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onCloseRequested() noexcept {
+void TlsCore<Backend>::onCloseRequested() noexcept {
     // Committed data, then close_notify; best effort, never blocks.
     if (tlsUserTx_) {
         this->encryptPending();
@@ -216,12 +216,12 @@ void TLSCore<Backend>::onCloseRequested() noexcept {
 // Handshake.
 
 template <typename Backend>
-void TLSCore<Backend>::onConnected() noexcept {
+void TlsCore<Backend>::onConnected() noexcept {
     this->startHandshake();
 }
 
 template <typename Backend>
-void TLSCore<Backend>::startHandshake() noexcept {
+void TlsCore<Backend>::startHandshake() noexcept {
     state_ = ConnectionState::Handshaking;
 
     // Can kernel TLS work at all? With Require, fail before talking to the server (every
@@ -247,7 +247,7 @@ void TLSCore<Backend>::startHandshake() noexcept {
             return;
         }
         sslContext_ = *ctx;
-        ::SSL_CTX_set_keylog_callback(sslContext_, &TLSCore::onKeylog);
+        ::SSL_CTX_set_keylog_callback(sslContext_, &TlsCore::onKeylog);
     }
 
     ssl_ = ::SSL_new(sslContext_);
@@ -295,7 +295,7 @@ void TLSCore<Backend>::startHandshake() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onHandshakePoll(std::int32_t res) noexcept {
+void TlsCore<Backend>::onHandshakePoll(std::int32_t res) noexcept {
     if (state_ != ConnectionState::Handshaking) {
         return; // closing
     }
@@ -309,7 +309,7 @@ void TLSCore<Backend>::onHandshakePoll(std::int32_t res) noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::driveHandshake() noexcept {
+void TlsCore<Backend>::driveHandshake() noexcept {
     ::ERR_clear_error();
     int rc;
     {
@@ -343,7 +343,7 @@ void TLSCore<Backend>::driveHandshake() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::armHandshakePoll(unsigned events) noexcept {
+void TlsCore<Backend>::armHandshakePoll(unsigned events) noexcept {
     auto const remaining = handshakeDeadline_ - std::chrono::steady_clock::now();
     if (remaining <= std::chrono::steady_clock::duration::zero()) {
         this->fail(makeErrorCode(Error::TlsHandshakeTimeout));
@@ -361,7 +361,7 @@ void TLSCore<Backend>::armHandshakePoll(unsigned events) noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::completeHandshake() noexcept {
+void TlsCore<Backend>::completeHandshake() noexcept {
     tlsVersion_ = ::SSL_get_version(ssl_);
     tlsCipher_ = ::SSL_CIPHER_get_name(::SSL_get_current_cipher(ssl_));
     bool const require = tlsOptions_.kernelTls == KernelTls::Require;
@@ -422,7 +422,7 @@ void TLSCore<Backend>::completeHandshake() noexcept {
 }
 
 template <typename Backend>
-auto TLSCore<Backend>::installKernelRx() noexcept -> std::error_code {
+auto TlsCore<Backend>::installKernelRx() noexcept -> std::error_code {
     // Nothing has been read with the server traffic secret yet (no read-ahead, the handshake just
     // finished), so the record sequence is 0.
     if (::SSL_version(ssl_) != TLS1_3_VERSION || serverTrafficSecretSize_ == 0 || ::SSL_has_pending(ssl_)) {
@@ -443,14 +443,14 @@ auto TLSCore<Backend>::installKernelRx() noexcept -> std::error_code {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onKeylog(ssl_st const* ssl, char const* line) noexcept {
+void TlsCore<Backend>::onKeylog(ssl_st const* ssl, char const* line) noexcept {
     // "SERVER_TRAFFIC_SECRET_0 <client random hex> <secret hex>" (NSS key log format)
     constexpr std::string_view kLabel = "SERVER_TRAFFIC_SECRET_0 ";
     std::string_view text{line};
     if (!text.starts_with(kLabel)) {
         return;
     }
-    auto* self = static_cast<TLSCore*>(SSL_get_app_data(ssl));
+    auto* self = static_cast<TlsCore*>(SSL_get_app_data(ssl));
     if (!self) {
         return;
     }
@@ -477,7 +477,7 @@ void TLSCore<Backend>::onKeylog(ssl_st const* ssl, char const* line) noexcept {
 // Receiving.
 
 template <typename Backend>
-void TLSCore<Backend>::armRecv() noexcept {
+void TlsCore<Backend>::armRecv() noexcept {
     if (tlsUserRx_) {
         // Ciphertext goes to its own ring; rxStalled_ tracks the plaintext ring (decryptPending()).
         auto const buffer = cipherRx_.writable();
@@ -511,7 +511,7 @@ void TLSCore<Backend>::armRecv() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onKernelRecv(std::int32_t res) noexcept {
+void TlsCore<Backend>::onKernelRecv(std::int32_t res) noexcept {
     if (res > 0) {
         // The buffer was zeroed before the receive, so a missing control message reads as
         // cmsg_len == 0.
@@ -532,7 +532,7 @@ void TLSCore<Backend>::onKernelRecv(std::int32_t res) noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onTlsControlRecord(unsigned char recordType, std::size_t size) noexcept {
+void TlsCore<Backend>::onTlsControlRecord(unsigned char recordType, std::size_t size) noexcept {
     // The record content was written to the free part of the rx ring; it is not produced.
     auto const* data = static_cast<unsigned char const*>(recvIov_.iov_base);
     switch (recordType) {
@@ -558,7 +558,7 @@ void TLSCore<Backend>::onTlsControlRecord(unsigned char recordType, std::size_t 
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onUserspaceRecv(std::int32_t res) noexcept {
+void TlsCore<Backend>::onUserspaceRecv(std::int32_t res) noexcept {
     // Ciphertext lands in cipherRx_, OpenSSL decrypts into rxBuffer_.
     if (res > 0) [[likely]] {
         cipherRx_.produce(static_cast<std::size_t>(res));
@@ -590,7 +590,7 @@ void TLSCore<Backend>::onUserspaceRecv(std::int32_t res) noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::resumeRecv() noexcept {
+void TlsCore<Backend>::resumeRecv() noexcept {
     if (tlsUserRx_ && ssl_) {
         // Decrypt what is already buffered (in cipherRx_ or inside OpenSSL). Also after a close,
         // so that everything received before it can still be read.
@@ -604,7 +604,7 @@ void TLSCore<Backend>::resumeRecv() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::scheduleObserverNotify() noexcept {
+void TlsCore<Backend>::scheduleObserverNotify() noexcept {
     observerPending_ = true;
     if (!txDirty_) {
         ring_.schedule(this); // onTxReady() delivers it in the next poll()
@@ -612,7 +612,7 @@ void TLSCore<Backend>::scheduleObserverNotify() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::onTxReady() noexcept {
+void TlsCore<Backend>::onTxReady() noexcept {
     if (observerPending_) {
         observerPending_ = false;
         if (observer_) {
@@ -625,7 +625,7 @@ void TLSCore<Backend>::onTxReady() noexcept {
 // Sending.
 
 template <typename Backend>
-void TLSCore<Backend>::startSend() noexcept {
+void TlsCore<Backend>::startSend() noexcept {
     if (!tlsUserTx_) {
         this->submitSend(txBuffer_); // plaintext, the kernel encrypts
         return;
@@ -638,7 +638,7 @@ void TLSCore<Backend>::startSend() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::sendDirect() noexcept {
+void TlsCore<Backend>::sendDirect() noexcept {
     if (!tlsUserTx_) {
         this->sendNow(txBuffer_);
         return;
@@ -650,7 +650,7 @@ void TLSCore<Backend>::sendDirect() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::sendCloseNotify() noexcept {
+void TlsCore<Backend>::sendCloseNotify() noexcept {
     // Best effort, non-blocking: an alert record (type 21) via kTLS.
     unsigned char alert[2] = {1 /* warning */, kAlertCloseNotify};
     alignas(cmsghdr) unsigned char control[CMSG_SPACE(sizeof(unsigned char))]{};
@@ -671,8 +671,8 @@ void TLSCore<Backend>::sendCloseNotify() noexcept {
 // Userspace TLS.
 
 template <typename Backend>
-auto TLSCore<Backend>::bioMethod() noexcept -> BIO_METHOD* {
-    // One method per backend: its callbacks cast the BIO data to this very TLSCore type.
+auto TlsCore<Backend>::bioMethod() noexcept -> BIO_METHOD* {
+    // One method per backend: its callbacks cast the BIO data to this very TlsCore type.
     static BIO_METHOD* const method = [] {
         BIO_METHOD* m = ::BIO_meth_new(::BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "turboq-reactor");
         if (m) {
@@ -683,8 +683,8 @@ auto TLSCore<Backend>::bioMethod() noexcept -> BIO_METHOD* {
             ::BIO_meth_set_ctrl(m, [](BIO*, int cmd, long, void*) -> long {
                 return cmd == BIO_CTRL_FLUSH ? 1 : 0;
             });
-            ::BIO_meth_set_read_ex(m, &TLSCore::bioRead);
-            ::BIO_meth_set_write_ex(m, &TLSCore::bioWrite);
+            ::BIO_meth_set_read_ex(m, &TlsCore::bioRead);
+            ::BIO_meth_set_write_ex(m, &TlsCore::bioWrite);
         }
         return m;
     }();
@@ -692,7 +692,7 @@ auto TLSCore<Backend>::bioMethod() noexcept -> BIO_METHOD* {
 }
 
 template <typename Backend>
-auto TLSCore<Backend>::attachUserspaceBio() noexcept -> bool {
+auto TlsCore<Backend>::attachUserspaceBio() noexcept -> bool {
     BIO_METHOD* method = bioMethod();
     if (!method) {
         return false;
@@ -716,8 +716,8 @@ auto TLSCore<Backend>::attachUserspaceBio() noexcept -> bool {
 }
 
 template <typename Backend>
-auto TLSCore<Backend>::bioRead(bio_st* bio, char* data, std::size_t size, std::size_t* done) noexcept -> int {
-    auto* self = static_cast<TLSCore*>(::BIO_get_data(bio));
+auto TlsCore<Backend>::bioRead(bio_st* bio, char* data, std::size_t size, std::size_t* done) noexcept -> int {
+    auto* self = static_cast<TlsCore*>(::BIO_get_data(bio));
     BIO_clear_retry_flags(bio);
     auto const available = self->cipherRx_.readable();
     if (available.empty()) {
@@ -735,8 +735,8 @@ auto TLSCore<Backend>::bioRead(bio_st* bio, char* data, std::size_t size, std::s
 }
 
 template <typename Backend>
-auto TLSCore<Backend>::bioWrite(bio_st* bio, char const* data, std::size_t size, std::size_t* done) noexcept -> int {
-    auto* self = static_cast<TLSCore*>(::BIO_get_data(bio));
+auto TlsCore<Backend>::bioWrite(bio_st* bio, char const* data, std::size_t size, std::size_t* done) noexcept -> int {
+    auto* self = static_cast<TlsCore*>(::BIO_get_data(bio));
     BIO_clear_retry_flags(bio);
     auto const space = self->cipherTx_.writable();
     if (space.empty()) {
@@ -752,7 +752,7 @@ auto TLSCore<Backend>::bioWrite(bio_st* bio, char const* data, std::size_t size,
 }
 
 template <typename Backend>
-void TLSCore<Backend>::decryptPending() noexcept {
+void TlsCore<Backend>::decryptPending() noexcept {
     while (true) {
         auto const out = rxBuffer_.writable();
         if (out.empty()) {
@@ -787,7 +787,7 @@ void TLSCore<Backend>::decryptPending() noexcept {
 }
 
 template <typename Backend>
-void TLSCore<Backend>::encryptPending() noexcept {
+void TlsCore<Backend>::encryptPending() noexcept {
     while (!txBuffer_.empty()) {
         auto const data = txBuffer_.readable();
         std::size_t written = 0;
@@ -807,8 +807,8 @@ void TLSCore<Backend>::encryptPending() noexcept {
 } // namespace detail
 
 template <typename Backend>
-TLSConnection<Backend>::TLSConnection(Reactor<Backend>& reactor, TcpOptions tcp, TLSOptions tls)
-    : core_{detail::TLSCore<Backend>::create(reactor.backend(), std::move(tcp), std::move(tls))}, rx{core_->rx},
+TlsConnection<Backend>::TlsConnection(Reactor<Backend>& reactor, TcpOptions tcp, TlsOptions tls)
+    : core_{detail::TlsCore<Backend>::create(reactor.backend(), std::move(tcp), std::move(tls))}, rx{core_->rx},
       tx{core_->tx} {
     reactor.backend().attach(core_.get());
 }

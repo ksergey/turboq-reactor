@@ -18,7 +18,7 @@ compiled when used, and then that library has to be linked by you:
 |---|---|
 | `Reactor.h`, `EpollBackend.h`, `TcpConnection.h`, `UdpConnection.h`, `XdpConnection.h`, `Address.h` | nothing |
 | `IoUringBackend.h` | liburing |
-| `TLSConnection.h`, `WebsocketConnection.h` | OpenSSL 3.0+ (`OpenSSL::SSL`, `OpenSSL::Crypto`) |
+| `TlsConnection.h`, `WebsocketConnection.h` | OpenSSL 3.0+ (`OpenSSL::SSL`, `OpenSSL::Crypto`) |
 
 `Reactor<>` / `TcpConnection<>` use epoll by default; define `TURBOQ_REACTOR_IO_URING=1` (for the
 whole program) to make io_uring the default, or name the backend: `Reactor<IoUringBackend>`.
@@ -78,7 +78,7 @@ int main() {
 }
 ```
 
-`TcpConnection`, `TLSConnection` and `UdpConnection` (unicast and multicast) work the same way:
+`TcpConnection`, `TlsConnection` and `UdpConnection` (unicast and multicast) work the same way:
 `rx.fetch()` / `rx.consume()` to read, `tx.prepare()` / `tx.commit()` / `tx.flush()` to write.
 [`examples/binance_market_data.cpp`](examples/binance_market_data.cpp) adds reconnection with
 backoff, a liveness watchdog and graceful shutdown.

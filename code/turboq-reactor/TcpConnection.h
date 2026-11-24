@@ -52,7 +52,7 @@ namespace detail {
 /// Implementation of TcpConnection (see there): a TCP socket between the rx/tx rings. Owned by the
 /// handle, released through the reactor.
 ///
-/// Also the base of stream layers that sit on the socket (TLSCore). They plug in through a few
+/// Also the base of stream layers that sit on the socket (TlsCore). They plug in through a few
 /// virtual hooks; the plain TCP data path calls none of them except the ones named below:
 ///   onConnected()     once per connection
 ///   armRecv()         when receiving (re)starts after a stall or a handshake
@@ -315,7 +315,7 @@ protected:
 ///
 /// Owned by the user (movable); the reactor it was created with must outlive it.
 /// Not thread-safe: use a connection only from the thread that polls its reactor.
-/// For TLS see TLSConnection.
+/// For TLS see TlsConnection.
 template <typename Backend>
 class TcpConnection {
 private:

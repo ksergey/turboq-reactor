@@ -11,7 +11,7 @@
 #include <turboq-reactor/UdpConnection.h>
 #include <turboq-reactor/XdpConnection.h>
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
-#include <turboq-reactor/TLSConnection.h>
+#include <turboq-reactor/TlsConnection.h>
 #include <turboq-reactor/WebsocketConnection.h>
 #endif
 
@@ -69,7 +69,7 @@ TEST_SUITE("Reactor") {
         check(std::type_identity<TcpConnection<EpollBackend>>{});
         check(std::type_identity<UdpConnection<EpollBackend>>{});
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
-        check(std::type_identity<TLSConnection<EpollBackend>>{});
+        check(std::type_identity<TlsConnection<EpollBackend>>{});
 #endif
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
         check(std::type_identity<WebsocketConnection<EpollBackend>>{});
@@ -95,8 +95,8 @@ TEST_SUITE("Reactor") {
         static_assert(std::is_same_v<decltype(tcp), TcpConnection<EpollBackend>>);
         static_assert(std::is_same_v<decltype(udp), UdpConnection<EpollBackend>>);
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
-        TLSConnection tls{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}, {.serverName = "localhost"}};
-        static_assert(std::is_same_v<decltype(tls), TLSConnection<EpollBackend>>);
+        TlsConnection tls{reactor, {.endpoint = Endpoint{IPv4Address::loopback(), 1}}, {.serverName = "localhost"}};
+        static_assert(std::is_same_v<decltype(tls), TlsConnection<EpollBackend>>);
 #endif
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
         WebsocketConnection ws{reactor, {.url = "ws://localhost:1/"}};

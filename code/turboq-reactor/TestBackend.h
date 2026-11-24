@@ -15,7 +15,7 @@
 #include <turboq-reactor/UdpConnection.h>
 #include <turboq-reactor/XdpConnection.h>
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
-#include <turboq-reactor/TLSConnection.h>
+#include <turboq-reactor/TlsConnection.h>
 #include <turboq-reactor/WebsocketConnection.h>
 #endif
 
@@ -45,7 +45,7 @@ using Reactor = ::turboq::reactor::Reactor<TestBackend>;
 using TcpConnection = ::turboq::reactor::TcpConnection<TestBackend>;
 using UdpConnection = ::turboq::reactor::UdpConnection<TestBackend>;
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
-using TLSConnection = ::turboq::reactor::TLSConnection<TestBackend>;
+using TlsConnection = ::turboq::reactor::TlsConnection<TestBackend>;
 #endif
 #if defined(TURBOQ_REACTOR_HAS_OPENSSL)
 using WebsocketConnection = ::turboq::reactor::WebsocketConnection<TestBackend>;

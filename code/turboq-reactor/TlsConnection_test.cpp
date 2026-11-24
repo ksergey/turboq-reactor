@@ -132,8 +132,8 @@ public:
     }
 
     /// Server context; `cipherSuites` restricts TLS 1.3 suites, maxVersion caps the protocol.
-    [[nodiscard]] auto serverContext(
-        char const* cipherSuites = nullptr, int maxVersion = TLS1_3_VERSION) const -> SSL_CTX* {
+    [[nodiscard]] auto serverContext(char const* cipherSuites = nullptr, int maxVersion = TLS1_3_VERSION) const
+        -> SSL_CTX* {
         SSL_CTX* ctx = ::SSL_CTX_new(::TLS_server_method());
         REQUIRE(ctx != nullptr);
         REQUIRE(::SSL_CTX_use_certificate(ctx, cert_) == 1);
@@ -233,7 +233,7 @@ public:
 
 } // namespace
 
-TEST_SUITE("TLSConnection") {
+TEST_SUITE("TlsConnection") {
 
     TEST_CASE("TLS session in every kernel TLS mode") {
         TestCertificate certificate;
@@ -270,7 +270,7 @@ TEST_SUITE("TLSConnection") {
                     }};
 
                 Reactor reactor;
-                TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+                TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
                     {.serverName = "localhost", .caFile = certificate.pemPath(), .kernelTls = mode}};
                 REQUIRE(conn.connect());
 
@@ -325,7 +325,7 @@ TEST_SUITE("TLSConnection") {
                                  return rc <= 0 && ::SSL_get_error(ssl, rc) == SSL_ERROR_ZERO_RETURN;
                              }};
             Reactor reactor;
-            TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+            TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
                 {.caFile = certificate.pemPath(), .kernelTls = mode}};
             REQUIRE(conn.connect());
             REQUIRE(pollUntil(reactor, [&] {
@@ -358,7 +358,7 @@ TEST_SUITE("TLSConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TLSConnection conn{
+        TlsConnection conn{
             reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}, {.kernelTls = KernelTls::Require}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
@@ -378,7 +378,7 @@ TEST_SUITE("TLSConnection") {
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
         // Default trust store: the self-signed test certificate is not in it.
-        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}};
+        TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Closed;
@@ -391,7 +391,7 @@ TEST_SUITE("TLSConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+        TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
             {.serverName = "wrong.example", .caFile = certificate.pemPath()}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
@@ -404,7 +404,7 @@ TEST_SUITE("TLSConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TLSConnection conn{
+        TlsConnection conn{
             reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}, {.caFile = certificate.pemPath()}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
@@ -422,7 +422,7 @@ TEST_SUITE("TLSConnection") {
         TestCertificate certificate;
         TlsServer server{certificate.serverContext()};
         Reactor reactor;
-        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}, {.verifyPeer = false}};
+        TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}, {.verifyPeer = false}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Ready || conn.state() == ConnectionState::Closed;
@@ -434,7 +434,7 @@ TEST_SUITE("TLSConnection") {
     TEST_CASE("handshake timeout") {
         TlsServer silent; // accepts TCP (kernel backlog), never speaks TLS
         Reactor reactor;
-        TLSConnection conn{
+        TlsConnection conn{
             reactor, {.endpoint = {IPv4Address::loopback(), silent.port()}}, {.handshakeTimeout = 200ms}};
         REQUIRE(conn.connect());
         auto const start = std::chrono::steady_clock::now();
@@ -448,7 +448,7 @@ TEST_SUITE("TLSConnection") {
     TEST_CASE("peer closing during the handshake fails the connection") {
         TlsServer server;
         Reactor reactor;
-        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}};
+        TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Handshaking;
@@ -463,7 +463,7 @@ TEST_SUITE("TLSConnection") {
     TEST_CASE("user close during the handshake") {
         TlsServer silent;
         Reactor reactor;
-        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), silent.port()}}};
+        TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), silent.port()}}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
             return conn.state() == ConnectionState::Handshaking;
@@ -688,7 +688,7 @@ TEST_SUITE("TLSConnection") {
                              return ok;
                          }};
         Reactor reactor;
-        TLSConnection conn{reactor,
+        TlsConnection conn{reactor,
             {.endpoint = {IPv4Address::loopback(), server.port()}, .rxBufferSize = 4096, .txBufferSize = 8192},
             {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
         REQUIRE(conn.connect());
@@ -743,7 +743,7 @@ TEST_SUITE("TLSConnection") {
                 return readExactly(ssl, 5) == "reply";
             }};
         Reactor reactor;
-        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+        TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
             {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
@@ -769,7 +769,7 @@ TEST_SUITE("TLSConnection") {
                              return true;
                          }};
         Reactor reactor;
-        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
+        TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}},
             {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
         REQUIRE(conn.connect());
         REQUIRE(pollUntil(reactor, [&] {
@@ -792,7 +792,7 @@ TEST_SUITE("TLSConnection") {
                              return true;
                          }};
         Reactor reactor;
-        TLSConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}, .rxBufferSize = 4096},
+        TlsConnection conn{reactor, {.endpoint = {IPv4Address::loopback(), server.port()}, .rxBufferSize = 4096},
             {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
         REQUIRE(conn.connect());
         // Do not consume: the connection closes with most of the data still undecrypted.
@@ -892,7 +892,7 @@ TEST_SUITE("TLSConnection") {
         {
             TlsServer server{certificate.serverContext(), streamForever};
             {
-                TLSConnection conn{reactor,
+                TlsConnection conn{reactor,
                     {.endpoint = {IPv4Address::loopback(), server.port()}, .rxBufferSize = 4096},
                     {.caFile = certificate.pemPath(), .kernelTls = KernelTls::Disable}};
                 REQUIRE(conn.connect());
