@@ -10,7 +10,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <flat_map>
 #include <span>
 #include <vector>
 
@@ -94,8 +93,14 @@ private:
     std::vector<int> sendScratch_;
     std::vector<Completion> completions_;
     std::vector<Completion> delivering_;
-    // By deadline: the next one to fire is the first. Equal deadlines keep the order they were added.
-    std::flat_multimap<std::chrono::steady_clock::time_point, Timer> timers_;
+    struct TimerEntry {
+        std::chrono::steady_clock::time_point deadline;
+        Timer timer;
+    };
+
+    // Sorted by deadline: the next one to fire is the first. Equal deadlines keep the order they
+    // were added (insertion goes after the last entry with the same deadline). Reserved up front.
+    std::vector<TimerEntry> timers_;
     std::vector<Timer> expired_;
 
 public:

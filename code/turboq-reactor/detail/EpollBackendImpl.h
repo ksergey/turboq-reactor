@@ -59,11 +59,7 @@ inline EpollBackend::EpollBackend(Options const& options) {
     sendScratch_.reserve(maxFds);
     completions_.reserve(maxFds * detail::epoll::kCompletionsPerFd);
     delivering_.reserve(maxFds * detail::epoll::kCompletionsPerFd);
-    std::vector<std::chrono::steady_clock::time_point> deadlines;
-    std::vector<Timer> timers;
-    deadlines.reserve(maxFds * detail::epoll::kTimersPerFd);
-    timers.reserve(maxFds * detail::epoll::kTimersPerFd);
-    timers_.replace(std::move(deadlines), std::move(timers));
+    timers_.reserve(maxFds * detail::epoll::kTimersPerFd);
     expired_.reserve(maxFds * detail::epoll::kTimersPerFd);
     epollFd_ = ::epoll_create1(EPOLL_CLOEXEC);
     if (epollFd_ < 0) {
@@ -355,34 +351,40 @@ inline auto EpollBackend::addTimer(
     if (!timeout) {
         return true; // no time limit
     }
-    if (timers_.size() == timers_.keys().capacity()) [[unlikely]] {
+    if (timers_.size() == timers_.capacity()) [[unlikely]] {
         return false;
     }
-    timers_.emplace(std::chrono::steady_clock::now() + detail::epoll::toDuration(timeout), Timer{handler, op, fd});
+    auto const deadline = std::chrono::steady_clock::now() + detail::epoll::toDuration(timeout);
+    // After the last entry with the same deadline: keeps the order of addition. No reallocation
+    // (size < capacity).
+    auto const pos = std::upper_bound(
+        timers_.begin(), timers_.end(), deadline, [](auto const& d, TimerEntry const& e) { return d < e.deadline; });
+    timers_.insert(pos, TimerEntry{deadline, Timer{handler, op, fd}});
     return true;
 }
 
 inline void EpollBackend::removeTimer(detail::OpCode op, int fd) noexcept {
-    std::erase_if(timers_, [&](auto const& entry) {
-        return entry.second.op == op && entry.second.fd == fd;
+    std::erase_if(timers_, [&](TimerEntry const& entry) {
+        return entry.timer.op == op && entry.timer.fd == fd;
     });
 }
 
 inline auto EpollBackend::nextTimerIn() const noexcept -> std::chrono::nanoseconds {
     return std::max(std::chrono::nanoseconds::zero(), std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                                          timers_.keys().front() - std::chrono::steady_clock::now()));
+                                                          timers_.front().deadline - std::chrono::steady_clock::now()));
 }
 
 inline auto EpollBackend::fireTimers() noexcept -> std::size_t {
     // The expired timers are the ones up to the first with a later deadline. They are taken out
     // before any handler runs: handlers may add or remove timers.
-    auto const end = timers_.upper_bound(std::chrono::steady_clock::now());
+    auto const end = std::upper_bound(timers_.begin(), timers_.end(), std::chrono::steady_clock::now(),
+        [](auto const& now, TimerEntry const& e) { return now < e.deadline; });
     if (end == timers_.begin()) {
         return 0;
     }
     expired_.clear();
     for (auto it = timers_.begin(); it != end; ++it) {
-        expired_.push_back(it->second);
+        expired_.push_back(it->timer);
     }
     timers_.erase(timers_.begin(), end);
 
@@ -530,8 +532,8 @@ inline void EpollBackend::cancelTimer(detail::IoHandler* handler) noexcept {
     if (!this->canQueue(1)) [[unlikely]] {
         return;
     }
-    auto const removed = std::erase_if(timers_, [&](auto const& entry) {
-        return entry.second.op == detail::OpCode::Timer && entry.second.handler == handler;
+    auto const removed = std::erase_if(timers_, [&](TimerEntry const& entry) {
+        return entry.timer.op == detail::OpCode::Timer && entry.timer.handler == handler;
     });
     for (std::size_t i = 0; i < removed; ++i) {
         this->queue(handler, detail::OpCode::Timer, -ECANCELED);
