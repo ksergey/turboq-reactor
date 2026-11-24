@@ -94,10 +94,14 @@ public:
         ::X509_gmtime_adj(::X509_getm_notBefore(cert_), -3600);
         ::X509_gmtime_adj(::X509_getm_notAfter(cert_), 24 * 3600);
         ::X509_set_pubkey(cert_, key_);
-        X509_NAME* name = ::X509_get_subject_name(cert_);
+        // Build the name ourselves: X509_get_subject_name() returns a const pointer in OpenSSL 4.0.
+        X509_NAME* name = ::X509_NAME_new();
+        REQUIRE(name != nullptr);
         static constexpr unsigned char kCommonName[] = "localhost";
         ::X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, kCommonName, -1, -1, 0);
+        ::X509_set_subject_name(cert_, name);
         ::X509_set_issuer_name(cert_, name);
+        ::X509_NAME_free(name);
 
         X509V3_CTX ctx;
         X509V3_set_ctx_nodb(&ctx);
