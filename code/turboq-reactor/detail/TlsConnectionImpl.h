@@ -281,7 +281,11 @@ void TlsCore<Backend>::startHandshake() noexcept {
             });
             ok = ::X509_VERIFY_PARAM_set1_ip(::SSL_get0_param(ssl_), bytes.data(), bytes.size()) == 1;
         } else {
+#if OPENSSL_VERSION_MAJOR >= 4
+            ok = ::SSL_set1_dnsname(ssl_, serverName->c_str()) == 1; // SSL_set1_host() is deprecated in 4.0
+#else
             ok = ::SSL_set1_host(ssl_, serverName->c_str()) == 1;
+#endif
         }
     }
     if (!ok) {
